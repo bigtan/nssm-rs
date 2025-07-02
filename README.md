@@ -155,7 +155,18 @@ nssm-rs start APIService
 ```powershell
 nssm-rs install PythonService "python.exe" "C:\Scripts\my_service.py"
 nssm-rs set PythonService AppDirectory "C:\Scripts"
+nssm-rs set PythonService AppStdout "C:\Logs\python_service.log"
+nssm-rs set PythonService AppStderr "C:\Logs\python_service_error.log"
 nssm-rs start PythonService
+```
+
+### Node.js Application as Service
+```powershell
+nssm-rs install NodeService "node.exe" "C:\MyApp\server.js"
+nssm-rs set NodeService AppDirectory "C:\MyApp"
+nssm-rs set NodeService AppStdout "C:\Logs\node_service.log"
+nssm-rs set NodeService AppStderr "C:\Logs\node_service_error.log"
+nssm-rs start NodeService
 ```
 
 ## Architecture
@@ -192,8 +203,12 @@ NSSM-RS attempts multiple methods to stop applications gracefully:
 - Administrator privileges for service management
 - Rust 1.70+ for building from source
 
-## Building
+## Installation
 
+### Pre-built Binary
+Download the latest release from the releases page and place `nssm-rs.exe` in a directory that's in your system PATH.
+
+### Build from Source
 ```powershell
 # Clone and build
 git clone <repository-url>
@@ -203,14 +218,16 @@ cargo build --release
 
 The executable will be created at `target/release/nssm-rs.exe`.
 
+### Optimized Build
+
+The project is configured for size-optimized release builds:
+- **Strip symbols**: Debug information is removed from the binary
+- **Size optimization**: Uses `-Oz` optimization level for minimal binary size
+- **Performance**: Optimized for deployment while maintaining good performance
+
 ## Testing
 
-See [USAGE.md](USAGE.md) for comprehensive testing examples and scenarios.
-
-The project includes test applications:
-- `examples/test-app/` - Rust test application
-- `examples/test_service.py` - Python test script
-- `examples/test_service.bat` - Batch test script
+See [USAGE.md](USAGE.md) for comprehensive usage examples and scenarios.
 
 ## Compatibility
 

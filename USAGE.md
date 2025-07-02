@@ -5,14 +5,14 @@
 ### 1. 安装服务
 
 ```powershell
-# 安装一个简单的测试服务
-nssm-rs install TestService "D:\WorkPlace\Rust\nssm-rs\examples\test-app\target\release\test-app.exe"
+# 安装一个简单的服务（以记事本为例）
+nssm-rs install TestService "C:\Windows\System32\notepad.exe"
 
 # 安装带参数的服务
-nssm-rs install TestServiceError "D:\WorkPlace\Rust\nssm-rs\examples\test-app\target\release\test-app.exe" error
+nssm-rs install MyWebServer "C:\MyApp\server.exe" --port 8080 --config production.json
 
 # 安装 Python 脚本服务
-nssm-rs install PythonTestService "python" "D:\WorkPlace\Rust\nssm-rs\examples\test_service.py"
+nssm-rs install PythonTestService "python" "C:\Scripts\my_service.py"
 ```
 
 ### 2. 配置服务
@@ -28,7 +28,7 @@ nssm-rs set TestService Description "A test service managed by nssm-rs"
 nssm-rs set TestService Start SERVICE_AUTO_START
 
 # 设置工作目录
-nssm-rs set TestService AppDirectory "D:\WorkPlace\Rust\nssm-rs\examples\test-app"
+nssm-rs set TestService AppDirectory "C:\MyApp"
 
 # 设置输出重定向
 nssm-rs set TestService AppStdout "D:\Logs\TestService_stdout.log"
@@ -128,35 +128,38 @@ nssm-rs set TestService AppNoConsole 1
 ### 场景1：测试正常服务
 
 ```powershell
-# 安装并启动一个正常的测试服务
-nssm-rs install NormalTest "D:\WorkPlace\Rust\nssm-rs\examples\test-app\target\release\test-app.exe"
+# 安装并启动一个正常的服务（以记事本为例）
+nssm-rs install NormalTest "C:\Windows\System32\notepad.exe"
 nssm-rs set NormalTest DisplayName "Normal Test Service"
 nssm-rs set NormalTest AppStdout "D:\Logs\normal_test.log"
 nssm-rs start NormalTest
 nssm-rs status NormalTest
 ```
 
-### 场景2：测试错误退出和重启
+### 场景2：测试Web服务
 
 ```powershell
-# 安装一个会出错的服务来测试重启功能
-nssm-rs install ErrorTest "D:\WorkPlace\Rust\nssm-rs\examples\test-app\target\release\test-app.exe" error
-nssm-rs set ErrorTest AppExitAction Restart
-nssm-rs set ErrorTest AppRestartDelay 2000
-nssm-rs set ErrorTest AppStdout "D:\Logs\error_test.log"
-nssm-rs start ErrorTest
-# 观察日志，应该看到服务会在错误后重启
+# 安装一个Web服务来测试重启功能
+nssm-rs install WebTest "C:\MyApp\webserver.exe" --port 8080
+nssm-rs set WebTest AppExitAction Restart
+nssm-rs set WebTest AppRestartDelay 2000
+nssm-rs set WebTest AppStdout "D:\Logs\web_test.log"
+nssm-rs set WebTest AppStderr "D:\Logs\web_test_error.log"
+nssm-rs start WebTest
+# 观察日志，如果服务异常退出会自动重启
 ```
 
-### 场景3：测试节流机制
+### 场景3：测试Python服务
 
 ```powershell
-# 安装一个快速退出的服务来测试节流
-nssm-rs install ThrottleTest "D:\WorkPlace\Rust\nssm-rs\examples\test-app\target\release\test-app.exe" quick
-nssm-rs set ThrottleTest AppThrottle 5000  # 5秒节流时间
-nssm-rs set ThrottleTest AppStdout "D:\Logs\throttle_test.log"
-nssm-rs start ThrottleTest
-# 观察日志，应该看到快速重启之间有延迟
+# 安装一个Python服务来测试脚本类应用
+nssm-rs install PythonTest "python.exe" "C:\Scripts\my_daemon.py"
+nssm-rs set PythonTest AppDirectory "C:\Scripts"
+nssm-rs set PythonTest AppThrottle 5000  # 5秒节流时间
+nssm-rs set PythonTest AppStdout "D:\Logs\python_test.log"
+nssm-rs set PythonTest AppStderr "D:\Logs\python_test_error.log"
+nssm-rs start PythonTest
+# 观察日志，Python脚本会作为服务运行
 ```
 
 ## 故障排除
