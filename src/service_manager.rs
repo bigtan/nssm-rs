@@ -401,7 +401,7 @@ impl ServiceManager {
             let result = RegCreateKeyExW(
                 HKEY_LOCAL_MACHINE,
                 PCWSTR::from_raw(key_path_wide.as_ptr()),
-                0,
+                Some(0),
                 PCWSTR::null(),
                 REG_OPTION_NON_VOLATILE,
                 KEY_WRITE,
@@ -498,7 +498,7 @@ impl ServiceManager {
             let result = RegOpenKeyExW(
                 HKEY_LOCAL_MACHINE,
                 PCWSTR::from_raw(key_path_wide.as_ptr()),
-                0,
+                Some(0),
                 KEY_READ,
                 &mut key_handle,
             );
@@ -635,7 +635,7 @@ impl ServiceManager {
             let result = RegSetValueExW(
                 *key,
                 PCWSTR::from_raw(name_wide.as_ptr()),
-                0,
+                Some(0),
                 REG_SZ,
                 Some(std::slice::from_raw_parts(
                     value_wide.as_ptr() as *const u8,
@@ -658,7 +658,7 @@ impl ServiceManager {
             let result = RegSetValueExW(
                 *key,
                 PCWSTR::from_raw(name_wide.as_ptr()),
-                0,
+                Some(0),
                 REG_DWORD,
                 Some(std::slice::from_raw_parts(
                     &value as *const u32 as *const u8,
@@ -788,7 +788,7 @@ impl ServiceManager {
             let result = RegOpenKeyExW(
                 HKEY_LOCAL_MACHINE,
                 PCWSTR::from_raw(services_key_path_wide.as_ptr()),
-                0,
+                Some(0),
                 KEY_READ,
                 &mut services_key,
             );
@@ -808,10 +808,12 @@ impl ServiceManager {
                 let result = RegEnumKeyExW(
                     services_key,
                     index,
-                    windows::core::PWSTR::from_raw(service_name_buffer.as_mut_ptr()),
+                    Some(windows::core::PWSTR::from_raw(
+                        service_name_buffer.as_mut_ptr(),
+                    )),
                     &mut service_name_len,
                     None,
-                    windows::core::PWSTR::null(),
+                    Some(windows::core::PWSTR::null()),
                     None,
                     None,
                 );
@@ -851,7 +853,7 @@ impl ServiceManager {
             let result = RegOpenKeyExW(
                 HKEY_LOCAL_MACHINE,
                 PCWSTR::from_raw(key_path_wide.as_ptr()),
-                0,
+                Some(0),
                 KEY_READ,
                 &mut key_handle,
             );

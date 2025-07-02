@@ -430,10 +430,11 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
     if (config.app_stop_method_skip & 2) == 0 {
         info!("Sending WM_CLOSE to child process windows");
         unsafe {
-            use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+            use windows::Win32::Foundation::{HWND, LPARAM, TRUE};
             use windows::Win32::UI::WindowsAndMessaging::{
                 EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
             };
+            use windows::core::BOOL;
 
             unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
                 unsafe {
@@ -442,13 +443,13 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
                     GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
                     if window_pid == target_pid {
                         let _ = PostMessageW(
-                            hwnd,
+                            Some(hwnd),
                             WM_CLOSE,
                             windows::Win32::Foundation::WPARAM(0),
                             LPARAM(0),
                         );
                     }
-                    BOOL::from(true)
+                    TRUE
                 }
             }
 
