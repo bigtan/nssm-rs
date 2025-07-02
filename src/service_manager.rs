@@ -1,10 +1,10 @@
-use crate::cli::{ServiceConfig, ServiceStartType, ProcessPriority};
+use crate::cli::{ProcessPriority, ServiceConfig, ServiceStartType};
 use log::{debug, error, info, warn};
 use std::path::PathBuf;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::ERROR_SUCCESS;
-use windows::Win32::System::Services::*;
 use windows::Win32::System::Registry::*;
+use windows::Win32::System::Services::*;
 
 pub struct ServiceManager {
     handle: SC_HANDLE,
@@ -14,14 +14,11 @@ impl ServiceManager {
     pub fn new() -> Result<Self, String> {
         debug!("Creating new ServiceManager instance");
         unsafe {
-            let handle = OpenSCManagerW(
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SC_MANAGER_ALL_ACCESS,
-            ).map_err(|e| {
-                error!("Failed to open service control manager: {}", e);
-                format!("Failed to open service control manager: {}", e)
-            })?;
+            let handle = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ALL_ACCESS)
+                .map_err(|e| {
+                    error!("Failed to open service control manager: {}", e);
+                    format!("Failed to open service control manager: {}", e)
+                })?;
 
             info!("ServiceManager created successfully");
             Ok(ServiceManager { handle })
@@ -37,10 +34,15 @@ impl ServiceManager {
         info!("Creating service configuration for '{}'", service_name);
         debug!("Application: {:?}", application);
         debug!("Arguments: {:?}", arguments);
-        
+
         let config = ServiceConfig {
             application: application.clone(),
-            app_directory: Some(application.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf()),
+            app_directory: Some(
+                application
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf(),
+            ),
             app_parameters: if arguments.is_empty() {
                 None
             } else {
@@ -56,31 +58,39 @@ impl ServiceManager {
     pub fn create_service(&self, service_name: &str, config: &ServiceConfig) -> Result<(), String> {
         info!("Creating Windows service '{}'", service_name);
         debug!("Service configuration: {:?}", config);
-        
+
         unsafe {
             // Get current executable path (nssm-rs.exe)
-            let nssm_path = std::env::current_exe()
-                .map_err(|e| {
-                    error!("Failed to get current executable path: {}", e);
-                    format!("Failed to get current executable path: {}", e)
-                })?;
+            let nssm_path = std::env::current_exe().map_err(|e| {
+                error!("Failed to get current executable path: {}", e);
+                format!("Failed to get current executable path: {}", e)
+            })?;
 
             debug!("NSSM-RS executable path: {:?}", nssm_path);
 
             // Construct the service command line
-            let service_command = format!(
-                "\"{}\" run {}",
-                nssm_path.to_string_lossy(),
-                service_name
-            );
+            let service_command =
+                format!("\"{}\" run {}", nssm_path.to_string_lossy(), service_name);
 
             debug!("Service command line: {}", service_command);
 
-            let service_name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
+            let service_name_wide: Vec<u16> = service_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let default_display_name = service_name.to_string();
-            let display_name = config.display_name.as_ref().unwrap_or(&default_display_name);
-            let display_name_wide: Vec<u16> = display_name.encode_utf16().chain(std::iter::once(0)).collect();
-            let service_command_wide: Vec<u16> = service_command.encode_utf16().chain(std::iter::once(0)).collect();
+            let display_name = config
+                .display_name
+                .as_ref()
+                .unwrap_or(&default_display_name);
+            let display_name_wide: Vec<u16> = display_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let service_command_wide: Vec<u16> = service_command
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
             let service_handle = CreateServiceW(
                 self.handle,
@@ -96,7 +106,8 @@ impl ServiceManager {
                 PCWSTR::null(),
                 PCWSTR::null(),
                 PCWSTR::null(),
-            ).map_err(|e| {
+            )
+            .map_err(|e| {
                 error!("Failed to create Windows service '{}': {}", service_name, e);
                 format!("Failed to create service: {}", e)
             })?;
@@ -115,9 +126,12 @@ impl ServiceManager {
 
     pub fn remove_service(&self, service_name: &str, confirm: bool) -> Result<(), String> {
         info!("Attempting to remove service '{}'", service_name);
-        
+
         if !confirm {
-            println!("Are you sure you want to remove service '{}'? (y/N)", service_name);
+            println!(
+                "Are you sure you want to remove service '{}'? (y/N)",
+                service_name
+            );
             let mut input = String::new();
             std::io::stdin().read_line(&mut input).map_err(|e| {
                 error!("Failed to read user input: {}", e);
@@ -130,15 +144,20 @@ impl ServiceManager {
         }
 
         unsafe {
-            let service_name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
-            
+            let service_name_wide: Vec<u16> = service_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+
             let service_handle = OpenServiceW(
                 self.handle,
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_ALL_ACCESS,
-            ).map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            )
+            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
 
-            DeleteService(service_handle).map_err(|e| format!("Failed to delete service '{}': {}", service_name, e))?;
+            DeleteService(service_handle)
+                .map_err(|e| format!("Failed to delete service '{}': {}", service_name, e))?;
             let _ = CloseServiceHandle(service_handle);
         }
 
@@ -151,15 +170,20 @@ impl ServiceManager {
 
     pub fn start_service(&self, service_name: &str) -> Result<(), String> {
         unsafe {
-            let service_name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
-            
+            let service_name_wide: Vec<u16> = service_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+
             let service_handle = OpenServiceW(
                 self.handle,
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_START,
-            ).map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            )
+            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
 
-            StartServiceW(service_handle, None).map_err(|e| format!("Failed to start service '{}': {}", service_name, e))?;
+            StartServiceW(service_handle, None)
+                .map_err(|e| format!("Failed to start service '{}': {}", service_name, e))?;
             let _ = CloseServiceHandle(service_handle);
         }
 
@@ -169,13 +193,17 @@ impl ServiceManager {
 
     pub fn stop_service(&self, service_name: &str) -> Result<(), String> {
         unsafe {
-            let service_name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
-            
+            let service_name_wide: Vec<u16> = service_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+
             let service_handle = OpenServiceW(
                 self.handle,
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_STOP,
-            ).map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            )
+            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
 
             let mut status = SERVICE_STATUS::default();
             ControlService(service_handle, SERVICE_CONTROL_STOP, &mut status)
@@ -187,7 +215,12 @@ impl ServiceManager {
         Ok(())
     }
 
-    pub fn set_service_parameter(&self, service_name: &str, parameter: &str, value: &str) -> Result<(), String> {
+    pub fn set_service_parameter(
+        &self,
+        service_name: &str,
+        parameter: &str,
+        value: &str,
+    ) -> Result<(), String> {
         let mut config = self.load_service_config(service_name)?;
 
         match parameter.to_uppercase().as_str() {
@@ -234,7 +267,8 @@ impl ServiceManager {
                 config.app_no_console = value != "0";
             }
             "APPTHROTTLE" => {
-                config.app_throttle = value.parse()
+                config.app_throttle = value
+                    .parse()
                     .map_err(|_| format!("Invalid throttle value: {}", value))?;
             }
             "APPSTDOUT" => {
@@ -259,23 +293,28 @@ impl ServiceManager {
                 };
             }
             "APPSTOPMETHOD" => {
-                config.app_stop_method_skip = value.parse()
+                config.app_stop_method_skip = value
+                    .parse()
                     .map_err(|_| format!("Invalid stop method value: {}", value))?;
             }
             "APPSTOPMETHOD_CONSOLE" => {
-                config.app_stop_method_console = value.parse()
+                config.app_stop_method_console = value
+                    .parse()
                     .map_err(|_| format!("Invalid stop method console value: {}", value))?;
             }
             "APPSTOPMETHOD_WINDOW" => {
-                config.app_stop_method_window = value.parse()
+                config.app_stop_method_window = value
+                    .parse()
                     .map_err(|_| format!("Invalid stop method window value: {}", value))?;
             }
             "APPSTOPMETHOD_THREADS" => {
-                config.app_stop_method_threads = value.parse()
+                config.app_stop_method_threads = value
+                    .parse()
                     .map_err(|_| format!("Invalid stop method threads value: {}", value))?;
             }
             "APPRESTARTDELAY" => {
-                config.app_restart_delay = value.parse()
+                config.app_restart_delay = value
+                    .parse()
                     .map_err(|_| format!("Invalid restart delay value: {}", value))?;
             }
             "APPEXITACTION" => {
@@ -288,16 +327,24 @@ impl ServiceManager {
         }
 
         self.save_service_config(service_name, &config)?;
-        info!("Parameter '{}' set to '{}' for service '{}'", parameter, value, service_name);
+        info!(
+            "Parameter '{}' set to '{}' for service '{}'",
+            parameter, value, service_name
+        );
         Ok(())
     }
 
-    pub fn get_service_parameter(&self, service_name: &str, parameter: &str) -> Result<String, String> {
+    pub fn get_service_parameter(
+        &self,
+        service_name: &str,
+        parameter: &str,
+    ) -> Result<String, String> {
         let config = self.load_service_config(service_name)?;
 
         let value = match parameter.to_uppercase().as_str() {
             "APPLICATION" => config.application.to_string_lossy().to_string(),
-            "APPDIRECTORY" => config.app_directory
+            "APPDIRECTORY" => config
+                .app_directory
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
             "APPPARAMETERS" => config.app_parameters.unwrap_or_default(),
@@ -318,13 +365,16 @@ impl ServiceManager {
             },
             "APPNOCONSOLE" => if config.app_no_console { "1" } else { "0" }.to_string(),
             "APPTHROTTLE" => config.app_throttle.to_string(),
-            "APPSTDOUT" => config.app_stdout
+            "APPSTDOUT" => config
+                .app_stdout
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
-            "APPSTDERR" => config.app_stderr
+            "APPSTDERR" => config
+                .app_stderr
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
-            "APPSTDIN" => config.app_stdin
+            "APPSTDIN" => config
+                .app_stdin
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
             "APPSTOPMETHOD" => config.app_stop_method_skip.to_string(),
@@ -342,10 +392,18 @@ impl ServiceManager {
         Ok(value)
     }
 
-    fn save_service_config(&self, service_name: &str, config: &ServiceConfig) -> Result<(), String> {
+    fn save_service_config(
+        &self,
+        service_name: &str,
+        config: &ServiceConfig,
+    ) -> Result<(), String> {
         unsafe {
-            let key_path = format!("SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters", service_name);
-            let key_path_wide: Vec<u16> = key_path.encode_utf16().chain(std::iter::once(0)).collect();
+            let key_path = format!(
+                "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
+                service_name
+            );
+            let key_path_wide: Vec<u16> =
+                key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
             let mut key_handle = HKEY::default();
             let result = RegCreateKeyExW(
@@ -365,7 +423,11 @@ impl ServiceManager {
             }
 
             // Save application path
-            self.set_registry_string(&key_handle, "Application", &config.application.to_string_lossy())?;
+            self.set_registry_string(
+                &key_handle,
+                "Application",
+                &config.application.to_string_lossy(),
+            )?;
 
             // Save app directory
             if let Some(ref app_dir) = config.app_directory {
@@ -378,15 +440,43 @@ impl ServiceManager {
             }
 
             // Save other settings
-            self.set_registry_dword(&key_handle, "AppPriority", config.app_priority.to_windows_value())?;
-            self.set_registry_dword(&key_handle, "AppNoConsole", if config.app_no_console { 1 } else { 0 })?;
+            self.set_registry_dword(
+                &key_handle,
+                "AppPriority",
+                config.app_priority.to_windows_value(),
+            )?;
+            self.set_registry_dword(
+                &key_handle,
+                "AppNoConsole",
+                if config.app_no_console { 1 } else { 0 },
+            )?;
             self.set_registry_dword(&key_handle, "AppThrottle", config.app_throttle)?;
-            self.set_registry_dword(&key_handle, "AppStopMethodSkip", config.app_stop_method_skip)?;
-            self.set_registry_dword(&key_handle, "AppStopMethodConsole", config.app_stop_method_console)?;
-            self.set_registry_dword(&key_handle, "AppStopMethodWindow", config.app_stop_method_window)?;
-            self.set_registry_dword(&key_handle, "AppStopMethodThreads", config.app_stop_method_threads)?;
+            self.set_registry_dword(
+                &key_handle,
+                "AppStopMethodSkip",
+                config.app_stop_method_skip,
+            )?;
+            self.set_registry_dword(
+                &key_handle,
+                "AppStopMethodConsole",
+                config.app_stop_method_console,
+            )?;
+            self.set_registry_dword(
+                &key_handle,
+                "AppStopMethodWindow",
+                config.app_stop_method_window,
+            )?;
+            self.set_registry_dword(
+                &key_handle,
+                "AppStopMethodThreads",
+                config.app_stop_method_threads,
+            )?;
             self.set_registry_dword(&key_handle, "AppRestartDelay", config.app_restart_delay)?;
-            self.set_registry_string(&key_handle, "AppExitDefault", config.app_exit_default.to_str())?;
+            self.set_registry_string(
+                &key_handle,
+                "AppExitDefault",
+                config.app_exit_default.to_str(),
+            )?;
 
             // Save I/O redirection settings
             if let Some(ref stdout_path) = config.app_stdout {
@@ -407,8 +497,12 @@ impl ServiceManager {
 
     fn load_service_config(&self, service_name: &str) -> Result<ServiceConfig, String> {
         unsafe {
-            let key_path = format!("SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters", service_name);
-            let key_path_wide: Vec<u16> = key_path.encode_utf16().chain(std::iter::once(0)).collect();
+            let key_path = format!(
+                "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
+                service_name
+            );
+            let key_path_wide: Vec<u16> =
+                key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
             let mut key_handle = HKEY::default();
             let result = RegOpenKeyExW(
@@ -420,7 +514,10 @@ impl ServiceManager {
             );
 
             if result != ERROR_SUCCESS {
-                return Err(format!("Failed to open registry key for service '{}'", service_name));
+                return Err(format!(
+                    "Failed to open registry key for service '{}'",
+                    service_name
+                ));
             }
 
             let mut config = ServiceConfig::default();
@@ -465,19 +562,26 @@ impl ServiceManager {
                 config.app_throttle = throttle;
             }
 
-            if let Ok(stop_method_skip) = self.get_registry_dword(&key_handle, "AppStopMethodSkip") {
+            if let Ok(stop_method_skip) = self.get_registry_dword(&key_handle, "AppStopMethodSkip")
+            {
                 config.app_stop_method_skip = stop_method_skip;
             }
 
-            if let Ok(stop_method_console) = self.get_registry_dword(&key_handle, "AppStopMethodConsole") {
+            if let Ok(stop_method_console) =
+                self.get_registry_dword(&key_handle, "AppStopMethodConsole")
+            {
                 config.app_stop_method_console = stop_method_console;
             }
 
-            if let Ok(stop_method_window) = self.get_registry_dword(&key_handle, "AppStopMethodWindow") {
+            if let Ok(stop_method_window) =
+                self.get_registry_dword(&key_handle, "AppStopMethodWindow")
+            {
                 config.app_stop_method_window = stop_method_window;
             }
 
-            if let Ok(stop_method_threads) = self.get_registry_dword(&key_handle, "AppStopMethodThreads") {
+            if let Ok(stop_method_threads) =
+                self.get_registry_dword(&key_handle, "AppStopMethodThreads")
+            {
                 config.app_stop_method_threads = stop_method_threads;
             }
 
@@ -517,15 +621,18 @@ impl ServiceManager {
 
     fn remove_service_config(&self, service_name: &str) -> Result<(), String> {
         unsafe {
-            let key_path = format!("SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters", service_name);
-            let key_path_wide: Vec<u16> = key_path.encode_utf16().chain(std::iter::once(0)).collect();
-
-            let result = RegDeleteTreeW(
-                HKEY_LOCAL_MACHINE,
-                PCWSTR::from_raw(key_path_wide.as_ptr()),
+            let key_path = format!(
+                "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
+                service_name
             );
+            let key_path_wide: Vec<u16> =
+                key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
-            if result != ERROR_SUCCESS && result.0 != 2 { // ERROR_FILE_NOT_FOUND
+            let result =
+                RegDeleteTreeW(HKEY_LOCAL_MACHINE, PCWSTR::from_raw(key_path_wide.as_ptr()));
+
+            if result != ERROR_SUCCESS && result.0 != 2 {
+                // ERROR_FILE_NOT_FOUND
                 warn!("Failed to delete service registry configuration");
             }
         }
@@ -637,23 +744,27 @@ impl ServiceManager {
 
     pub fn query_service_status(&self, service_name: &str) -> Result<(), String> {
         unsafe {
-            let service_name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
-            
+            let service_name_wide: Vec<u16> = service_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+
             let service_handle = OpenServiceW(
                 self.handle,
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_QUERY_STATUS,
-            ).map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            )
+            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
 
             let mut status = SERVICE_STATUS::default();
             QueryServiceStatus(service_handle, &mut status)
                 .map_err(|e| format!("Failed to query service status: {}", e))?;
-            
+
             let _ = CloseServiceHandle(service_handle);
 
             let state_str = match status.dwCurrentState.0 {
                 1 => "STOPPED",
-                2 => "START_PENDING", 
+                2 => "START_PENDING",
                 3 => "STOP_PENDING",
                 4 => "RUNNING",
                 5 => "CONTINUE_PENDING",
@@ -665,7 +776,10 @@ impl ServiceManager {
             println!("Service Name: {}", service_name);
             println!("State: {}", state_str);
             println!("Exit Code: {}", status.dwWin32ExitCode);
-            println!("Service Specific Exit Code: {}", status.dwServiceSpecificExitCode);
+            println!(
+                "Service Specific Exit Code: {}",
+                status.dwServiceSpecificExitCode
+            );
             println!("Checkpoint: {}", status.dwCheckPoint);
             println!("Wait Hint: {}ms", status.dwWaitHint);
         }
@@ -676,9 +790,12 @@ impl ServiceManager {
     pub fn list_nssm_services(&self) -> Result<(), String> {
         unsafe {
             use windows::Win32::System::Registry::{RegEnumKeyExW, RegOpenKeyExW};
-            
+
             let services_key_path = "SYSTEM\\CurrentControlSet\\Services";
-            let services_key_path_wide: Vec<u16> = services_key_path.encode_utf16().chain(std::iter::once(0)).collect();
+            let services_key_path_wide: Vec<u16> = services_key_path
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
             let mut services_key = HKEY::default();
             let result = RegOpenKeyExW(
@@ -695,7 +812,6 @@ impl ServiceManager {
 
             let mut index = 0u32;
             let mut service_name_buffer = vec![0u16; 256];
-
 
             println!("Services managed by nssm-rs:");
             let mut found_any = false;
@@ -717,8 +833,9 @@ impl ServiceManager {
                     break;
                 }
 
-                let service_name = String::from_utf16_lossy(&service_name_buffer[..service_name_len as usize]);
-                
+                let service_name =
+                    String::from_utf16_lossy(&service_name_buffer[..service_name_len as usize]);
+
                 // Check if this service has nssm-rs parameters
                 if self.has_nssm_config(&service_name) {
                     println!("  {}", service_name);
@@ -739,7 +856,10 @@ impl ServiceManager {
     }
 
     fn has_nssm_config(&self, service_name: &str) -> bool {
-        let key_path = format!("SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters", service_name);
+        let key_path = format!(
+            "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
+            service_name
+        );
         let key_path_wide: Vec<u16> = key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
         unsafe {
@@ -761,7 +881,6 @@ impl ServiceManager {
             }
         }
     }
-
 }
 
 impl Drop for ServiceManager {

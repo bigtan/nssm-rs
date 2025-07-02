@@ -11,7 +11,7 @@ use service_runner::run_service;
 #[cfg(windows)]
 fn main() {
     let cli = Cli::parse();
-    
+
     // 根据命令行参数设置日志级别
     let log_level = if cli.debug {
         log::LevelFilter::Debug
@@ -20,7 +20,7 @@ fn main() {
     } else {
         log::LevelFilter::Warn
     };
-    
+
     // 初始化日志记录器，支持环境变量配置日志级别
     env_logger::Builder::from_default_env()
         .filter_level(log_level)
@@ -48,36 +48,46 @@ fn main() {
     if cli.verbose {
         info!("Verbose mode enabled");
     }
-    
+
     debug!("Command parsed: {:?}", std::mem::discriminant(&cli.command));
 
     let result = match cli.command {
-        Commands::Install { service_name, application, arguments } => {
-            info!("Installing service '{}' with application: {:?}", service_name, application);
+        Commands::Install {
+            service_name,
+            application,
+            arguments,
+        } => {
+            info!(
+                "Installing service '{}' with application: {:?}",
+                service_name, application
+            );
             if !arguments.is_empty() {
                 info!("Application arguments: {:?}", arguments);
             }
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.install_service(&service_name, &application, &arguments)
-        },
-        Commands::Remove { service_name, confirm } => {
+        }
+        Commands::Remove {
+            service_name,
+            confirm,
+        } => {
             info!("Removing service '{}'", service_name);
             if !confirm {
                 info!("Confirmation will be required");
             }
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.remove_service(&service_name, confirm)
-        },
+        }
         Commands::Start { service_name } => {
             info!("Starting service '{}'", service_name);
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.start_service(&service_name)
-        },
+        }
         Commands::Stop { service_name } => {
             info!("Stopping service '{}'", service_name);
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.stop_service(&service_name)
-        },
+        }
         Commands::Restart { service_name } => {
             info!("Restarting service '{}'", service_name);
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
@@ -89,35 +99,56 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_secs(2));
             info!("Starting service...");
             service_manager.start_service(&service_name)
-        },
-        Commands::Set { service_name, parameter, value } => {
-            info!("Setting parameter '{}' = '{}' for service '{}'", parameter, value, service_name);
+        }
+        Commands::Set {
+            service_name,
+            parameter,
+            value,
+        } => {
+            info!(
+                "Setting parameter '{}' = '{}' for service '{}'",
+                parameter, value, service_name
+            );
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.set_service_parameter(&service_name, &parameter, &value)
-        },
-        Commands::Get { service_name, parameter } => {
-            info!("Getting parameter '{}' for service '{}'", parameter, service_name);
+        }
+        Commands::Get {
+            service_name,
+            parameter,
+        } => {
+            info!(
+                "Getting parameter '{}' for service '{}'",
+                parameter, service_name
+            );
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
-            service_manager.get_service_parameter(&service_name, &parameter).map(|_| ())
-        },
-        Commands::Reset { service_name, parameter } => {
-            info!("Resetting parameter '{}' for service '{}'", parameter, service_name);
+            service_manager
+                .get_service_parameter(&service_name, &parameter)
+                .map(|_| ())
+        }
+        Commands::Reset {
+            service_name,
+            parameter,
+        } => {
+            info!(
+                "Resetting parameter '{}' for service '{}'",
+                parameter, service_name
+            );
             // Reset to default value
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             let default_value = get_default_parameter_value(&parameter);
             info!("Default value for '{}': '{}'", parameter, default_value);
             service_manager.set_service_parameter(&service_name, &parameter, &default_value)
-        },
+        }
         Commands::Status { service_name } => {
             info!("Querying status for service '{}'", service_name);
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.query_service_status(&service_name)
-        },
+        }
         Commands::List => {
             info!("Listing all NSSM-RS managed services");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.list_nssm_services()
-        },
+        }
         Commands::Run { name } => {
             info!("Running as service: '{}'", name);
             let service_name = name.clone();
@@ -125,7 +156,7 @@ fn main() {
                 Ok(()) => {
                     info!("Service '{}' completed successfully", service_name);
                     Ok(())
-                },
+                }
                 Err(e) => {
                     error!("Service '{}' failed: {:?}", service_name, e);
                     // Try to print to console in case this was run directly
@@ -133,13 +164,13 @@ fn main() {
                     std::process::exit(1);
                 }
             }
-        },
+        }
     };
 
     match &result {
         Ok(()) => {
             info!("Operation completed successfully");
-        },
+        }
         Err(e) => {
             error!("Operation failed: {}", e);
             eprintln!("Error: {}", e);
@@ -149,7 +180,7 @@ fn main() {
     if let Err(_) = result {
         std::process::exit(1);
     }
-    
+
     info!("NSSM-RS shutting down normally");
 }
 

@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        
+    - name: Cache Cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Install dependencies
+      run: cargo fetch
+      
+    - name: Run tests
+      run: cargo test --verbose
+      
+    - name: Build release
+      run: cargo build --release --verbose
+      
+    - name: Create release directory
+      run: |
+        mkdir release-artifacts
+        cp target/release/nssm-rs.exe release-artifacts/
+        cp README.md release-artifacts/
+        cp USAGE.md release-artifacts/
+        cp LOGGING.md release-artifacts/
+        
+    - name: Create ZIP archive
+      run: |
+        cd release-artifacts
+        Compress-Archive -Path * -DestinationPath ../nssm-rs-windows-x64.zip
+        cd ..
+        
+    - name: Get release tag
+      id: get_tag
+      run: |
+        if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+          $tag = "${{ github.event.inputs.tag }}"
+        } else {
+          $tag = $env:GITHUB_REF -replace "refs/tags/", ""
+        }
+        echo "tag=$tag" >> $env:GITHUB_OUTPUT
+        echo "Release tag: $tag"
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.get_tag.outputs.tag }}
+        name: Release ${{ steps.get_tag.outputs.tag }}
+        body: |
+          ## Changes in this Release
+          
+          ### Features
+          - Service installation and management
+          - Service start/stop/restart operations
+          - Parameter configuration and querying
+          - Service status monitoring
+          - List managed services
+          
+          ### Download
+          - Download `nssm-rs-windows-x64.zip` for Windows x64
+          - Extract and run `nssm-rs.exe` with administrator privileges
+          
+          ### Installation
+          ```bash
+          # Install a service
+          nssm-rs.exe install MyService "C:\path\to\your\app.exe"
+          
+          # Start the service
+          nssm-rs.exe start MyService
+          ```
+          
+          For more usage information, see the included documentation files.
+          
+          ## Checksums
+          
+          | File | SHA256 |
+          |------|--------|
+          | nssm-rs-windows-x64.zip | `${{ hashFiles('./nssm-rs-windows-x64.zip') }}` |
+          | nssm-rs.exe | `${{ hashFiles('./target/release/nssm-rs.exe') }}` |
+        draft: false
+        prerelease: false
+        files: |
+          nssm-rs-windows-x64.zip
+          target/release/nssm-rs.exe
+        token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,51 @@
+name: Create Tag and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes (optional)'
+        required: false
+        type: string
+
+jobs:
+  create-tag-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Validate version format
+      run: |
+        if [[ ! "${{ github.event.inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "Error: Version must be in format x.y.z (e.g., 1.0.0)"
+          exit 1
+        fi
+        
+    - name: Update Cargo.toml version
+      run: |
+        sed -i 's/^version = ".*"/version = "${{ github.event.inputs.version }}"/' Cargo.toml
+        
+    - name: Commit version update
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add Cargo.toml
+        git commit -m "chore: bump version to ${{ github.event.inputs.version }}" || exit 0
+        
+    - name: Create and push tag
+      run: |
+        git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
+        git push origin main
+        git push origin "v${{ github.event.inputs.version }}"
+        
+    - name: Trigger release workflow
+      run: |
+        echo "Tag created successfully. Release workflow will be triggered automatically."

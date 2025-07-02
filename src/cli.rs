@@ -8,11 +8,11 @@ use std::path::PathBuf;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
-    
+
     /// Enable verbose output
     #[arg(short, long, global = true)]
     pub verbose: bool,
-    
+
     /// Enable debug output
     #[arg(short, long, global = true)]
     pub debug: bool,
@@ -183,9 +183,9 @@ impl Default for ServiceConfig {
 impl ServiceStartType {
     pub fn to_windows_value(&self) -> u32 {
         match self {
-            Self::Auto => 2,        // SERVICE_AUTO_START
-            Self::Manual => 3,      // SERVICE_DEMAND_START
-            Self::Disabled => 4,    // SERVICE_DISABLED
+            Self::Auto => 2,     // SERVICE_AUTO_START
+            Self::Manual => 3,   // SERVICE_DEMAND_START
+            Self::Disabled => 4, // SERVICE_DISABLED
         }
     }
 
@@ -202,12 +202,12 @@ impl ServiceStartType {
 impl ProcessPriority {
     pub fn to_windows_value(&self) -> u32 {
         match self {
-            Self::Realtime => 0x00000100,      // REALTIME_PRIORITY_CLASS
-            Self::High => 0x00000080,          // HIGH_PRIORITY_CLASS
-            Self::AboveNormal => 0x00008000,   // ABOVE_NORMAL_PRIORITY_CLASS
-            Self::Normal => 0x00000020,        // NORMAL_PRIORITY_CLASS
-            Self::BelowNormal => 0x00004000,   // BELOW_NORMAL_PRIORITY_CLASS
-            Self::Idle => 0x00000040,          // IDLE_PRIORITY_CLASS
+            Self::Realtime => 0x00000100,    // REALTIME_PRIORITY_CLASS
+            Self::High => 0x00000080,        // HIGH_PRIORITY_CLASS
+            Self::AboveNormal => 0x00008000, // ABOVE_NORMAL_PRIORITY_CLASS
+            Self::Normal => 0x00000020,      // NORMAL_PRIORITY_CLASS
+            Self::BelowNormal => 0x00004000, // BELOW_NORMAL_PRIORITY_CLASS
+            Self::Idle => 0x00000040,        // IDLE_PRIORITY_CLASS
         }
     }
 

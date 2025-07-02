@@ -5,14 +5,17 @@ use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::Win32::System::Console::{AllocConsole, CTRL_C_EVENT};
 use windows::Win32::System::Threading::{SetPriorityClass, PROCESS_CREATION_FLAGS};
 use windows_service::{
     define_windows_service,
-    service::{ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType},
+    service::{
+        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+        ServiceType,
+    },
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
 };
@@ -35,7 +38,7 @@ pub fn run_service(service_name: String) -> windows_service::Result<()> {
 fn service_main(arguments: Vec<OsString>) {
     info!("Service main function started");
     debug!("Service arguments: {:?}", arguments);
-    
+
     // Windows services don't start with a console, so we have to allocate one
     // in order to send ctrl-C to children.
     unsafe {
@@ -46,7 +49,8 @@ fn service_main(arguments: Vec<OsString>) {
         }
     }
 
-    let service_name = arguments.get(0)
+    let service_name = arguments
+        .get(0)
         .and_then(|arg| arg.to_str())
         .unwrap_or("nssm-rs")
         .to_string();
@@ -69,23 +73,32 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
             ServiceControl::Interrogate => {
-                debug!("Service '{}' received interrogate event", service_name_for_handler);
+                debug!(
+                    "Service '{}' received interrogate event",
+                    service_name_for_handler
+                );
                 ServiceControlHandlerResult::NoError
-            },
+            }
             ServiceControl::Stop => {
                 info!("Service '{}' received stop event", service_name_for_handler);
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
-            },
+            }
             ServiceControl::Shutdown => {
-                info!("Service '{}' received shutdown event", service_name_for_handler);
+                info!(
+                    "Service '{}' received shutdown event",
+                    service_name_for_handler
+                );
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
-            },
+            }
             _ => {
-                debug!("Service '{}' received unhandled control event: {:?}", service_name_for_handler, control_event);
+                debug!(
+                    "Service '{}' received unhandled control event: {:?}",
+                    service_name_for_handler, control_event
+                );
                 ServiceControlHandlerResult::NotImplemented
-            },
+            }
         }
     };
 
@@ -94,19 +107,25 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
 
     // Load service configuration
     info!("Loading service configuration for '{}'", service_name);
-    let service_manager = ServiceManager::new()
+    let service_manager = ServiceManager::new().map_err(|e| {
+        error!("Failed to create ServiceManager: {}", e);
+        windows_service::Error::Winapi(std::io::Error::new(std::io::ErrorKind::Other, e))
+    })?;
+
+    let config = service_manager
+        .load_service_config_for_run(&service_name)
         .map_err(|e| {
-            error!("Failed to create ServiceManager: {}", e);
-            windows_service::Error::Winapi(std::io::Error::new(std::io::ErrorKind::Other, e))
-        })?;
-    
-    let config = service_manager.load_service_config_for_run(&service_name)
-        .map_err(|e| {
-            error!("Failed to load service configuration for '{}': {}", service_name, e);
+            error!(
+                "Failed to load service configuration for '{}': {}",
+                service_name, e
+            );
             windows_service::Error::Winapi(std::io::Error::new(std::io::ErrorKind::Other, e))
         })?;
 
-    info!("Service configuration loaded successfully for '{}'", service_name);
+    info!(
+        "Service configuration loaded successfully for '{}'",
+        service_name
+    );
     debug!("Configuration: {:?}", config);
 
     // Set service status to running
@@ -129,7 +148,8 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
         if !stop_ctrlc_clone.load(Ordering::SeqCst) {
             // Ignore ctrl-C when not stopping
         }
-    }).expect("Error setting ctrl-C handler");
+    })
+    .expect("Error setting ctrl-C handler");
 
     let mut restart_after: Option<Instant> = None;
     let mut consecutive_failures = 0u32;
@@ -144,12 +164,12 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
             if now < delay_until {
                 let sleep_duration = (delay_until - now).min(Duration::from_millis(100));
                 debug!("Sleeping for restart delay: {:?}", sleep_duration);
-                
+
                 match shutdown_rx.recv_timeout(sleep_duration) {
                     Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                         info!("Cancelling restart due to shutdown signal");
                         break 'outer;
-                    },
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 }
             } else {
@@ -162,15 +182,15 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
 
         // Build command
         let mut cmd = Command::new(&config.application);
-        
+
         // Set working directory - default to application directory
-        let working_dir = config.app_directory.as_ref()
-            .cloned()
-            .unwrap_or_else(|| {
-                config.application.parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-            });
+        let working_dir = config.app_directory.as_ref().cloned().unwrap_or_else(|| {
+            config
+                .application
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+        });
         cmd.current_dir(&working_dir);
 
         // Add parameters
@@ -212,9 +232,12 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
         // Set process priority for the child process
         unsafe {
             use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_INFORMATION};
-            
+
             if let Ok(process_handle) = OpenProcess(PROCESS_SET_INFORMATION, false, child_id) {
-                let _ = SetPriorityClass(process_handle, PROCESS_CREATION_FLAGS(config.app_priority.to_windows_value()));
+                let _ = SetPriorityClass(
+                    process_handle,
+                    PROCESS_CREATION_FLAGS(config.app_priority.to_windows_value()),
+                );
                 let _ = windows::Win32::Foundation::CloseHandle(process_handle);
             } else {
                 warn!("Failed to set process priority for child process");
@@ -251,7 +274,7 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
             match shutdown_rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     info!("Shutting down service");
-                    
+
                     // Set service status to stopping
                     status_handle.set_service_status(ServiceStatus {
                         service_type: SERVICE_TYPE,
@@ -267,7 +290,7 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
                     stop_child_process(&mut child, &config, &stop_ctrlc);
                     service_exit_code = ServiceExitCode::NO_ERROR;
                     break 'outer;
-                },
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     // Continue monitoring
                 }
@@ -278,10 +301,13 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
                 Ok(ProcessStatus::Running) => {
                     // Process is still running
                     continue 'inner;
-                },
+                }
                 Ok(ProcessStatus::Exited(exit_code)) => {
                     let runtime = start_time.elapsed();
-                    info!("Application exited with code {} after {:?}", exit_code, runtime);
+                    info!(
+                        "Application exited with code {} after {:?}",
+                        exit_code, runtime
+                    );
 
                     service_exit_code = if exit_code == 0 {
                         ServiceExitCode::NO_ERROR
@@ -305,24 +331,24 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
                             info!("Scheduling restart in {:?}", throttle_delay);
                             restart_after = Some(Instant::now() + throttle_delay);
                         }
-                        
+
                         break 'inner; // Restart
                     } else {
                         info!("Not restarting application based on exit action");
                         break 'outer; // Exit service
                     }
-                },
+                }
                 Ok(ProcessStatus::Terminated) => {
                     info!("Application was terminated");
                     service_exit_code = ServiceExitCode::ServiceSpecific(259); // STILL_ACTIVE
-                    
+
                     // Always restart if terminated unexpectedly
                     let throttle_delay = Duration::from_millis(config.app_throttle as u64);
                     if throttle_delay.as_millis() > 0 {
                         restart_after = Some(Instant::now() + throttle_delay);
                     }
                     break 'inner;
-                },
+                }
                 Err(e) => {
                     error!("Error checking process status: {}", e);
                     service_exit_code = ServiceExitCode::ServiceSpecific(1);
@@ -359,11 +385,9 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
 fn check_process_status(child: &mut Child) -> Result<ProcessStatus, std::io::Error> {
     match child.try_wait() {
         Ok(None) => Ok(ProcessStatus::Running),
-        Ok(Some(status)) => {
-            match status.code() {
-                Some(code) => Ok(ProcessStatus::Exited(code)),
-                None => Ok(ProcessStatus::Terminated),
-            }
+        Ok(Some(status)) => match status.code() {
+            Some(code) => Ok(ProcessStatus::Exited(code)),
+            None => Ok(ProcessStatus::Terminated),
         },
         Err(e) => Err(e),
     }
@@ -389,8 +413,10 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
     if !config.app_no_console && (config.app_stop_method_skip & 1) == 0 {
         info!("Sending Ctrl-C to child process");
         unsafe {
-            use windows::Win32::System::Console::{AttachConsole, GenerateConsoleCtrlEvent, FreeConsole};
-            
+            use windows::Win32::System::Console::{
+                AttachConsole, FreeConsole, GenerateConsoleCtrlEvent,
+            };
+
             // Try to attach to child's console
             if AttachConsole(child_id).is_ok() {
                 let _ = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
@@ -406,7 +432,7 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
             match check_process_status(child) {
                 Ok(ProcessStatus::Running) => {
                     thread::sleep(Duration::from_millis(50));
-                },
+                }
                 _ => {
                     info!("Child process stopped after Ctrl-C");
                     stop_ctrlc.store(false, Ordering::SeqCst);
@@ -420,15 +446,22 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
     if (config.app_stop_method_skip & 2) == 0 {
         info!("Sending WM_CLOSE to child process windows");
         unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE};
             use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
-            
+            use windows::Win32::UI::WindowsAndMessaging::{
+                EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+            };
+
             unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
                 let target_pid = lparam.0 as u32;
                 let mut window_pid = 0u32;
                 GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
                 if window_pid == target_pid {
-                    let _ = PostMessageW(hwnd, WM_CLOSE, windows::Win32::Foundation::WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(
+                        hwnd,
+                        WM_CLOSE,
+                        windows::Win32::Foundation::WPARAM(0),
+                        LPARAM(0),
+                    );
                 }
                 BOOL::from(true)
             }
@@ -442,7 +475,7 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
             match check_process_status(child) {
                 Ok(ProcessStatus::Running) => {
                     thread::sleep(Duration::from_millis(50));
-                },
+                }
                 _ => {
                     info!("Child process stopped after WM_CLOSE");
                     stop_ctrlc.store(false, Ordering::SeqCst);
@@ -456,8 +489,10 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
     if (config.app_stop_method_skip & 4) == 0 {
         info!("Terminating child process threads");
         unsafe {
-            use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
-            
+            use windows::Win32::System::Threading::{
+                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+            };
+
             if let Ok(process_handle) = OpenProcess(PROCESS_TERMINATE, false, child_id) {
                 let _ = TerminateProcess(process_handle, 1);
                 let _ = windows::Win32::Foundation::CloseHandle(process_handle);
@@ -470,7 +505,7 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
             match check_process_status(child) {
                 Ok(ProcessStatus::Running) => {
                     thread::sleep(Duration::from_millis(50));
-                },
+                }
                 _ => {
                     info!("Child process stopped after thread termination");
                     stop_ctrlc.store(false, Ordering::SeqCst);
@@ -495,13 +530,13 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
 
 fn handle_stdout(stdout: std::process::ChildStdout, output_path: Option<std::path::PathBuf>) {
     let reader = BufReader::new(stdout);
-    
+
     if let Some(path) = output_path {
         // Redirect to file
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path) 
+            .open(&path)
         {
             Ok(mut file) => {
                 for line in reader.lines() {
@@ -512,11 +547,11 @@ fn handle_stdout(stdout: std::process::ChildStdout, output_path: Option<std::pat
                                 error!("Failed to write to stdout file");
                                 break;
                             }
-                        },
+                        }
                         Err(_) => break,
                     }
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to open stdout file {:?}: {}", path, e);
             }
@@ -534,13 +569,13 @@ fn handle_stdout(stdout: std::process::ChildStdout, output_path: Option<std::pat
 
 fn handle_stderr(stderr: std::process::ChildStderr, output_path: Option<std::path::PathBuf>) {
     let reader = BufReader::new(stderr);
-    
+
     if let Some(path) = output_path {
         // Redirect to file
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path) 
+            .open(&path)
         {
             Ok(mut file) => {
                 for line in reader.lines() {
@@ -551,11 +586,11 @@ fn handle_stderr(stderr: std::process::ChildStderr, output_path: Option<std::pat
                                 error!("Failed to write to stderr file");
                                 break;
                             }
-                        },
+                        }
                         Err(_) => break,
                     }
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to open stderr file {:?}: {}", path, e);
             }
@@ -581,7 +616,7 @@ fn parse_command_line(input: &str) -> Vec<String> {
         match ch {
             '"' => {
                 in_quotes = !in_quotes;
-            },
+            }
             ' ' | '\t' => {
                 if in_quotes {
                     current_arg.push(ch);
@@ -589,7 +624,7 @@ fn parse_command_line(input: &str) -> Vec<String> {
                     args.push(current_arg.clone());
                     current_arg.clear();
                 }
-            },
+            }
             _ => {
                 current_arg.push(ch);
             }
