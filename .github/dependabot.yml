@@ -26,11 +26,10 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    # Ignore specific dependencies if needed
-    ignore:
-      # Example: ignore major version updates for critical dependencies
-      # - dependency-name: "windows"
-      #   update-types: ["version-update:semver-major"]
+    # Ignore specific dependencies if needed (uncomment when needed)
+    # ignore:
+    #   - dependency-name: "windows"
+    #     update-types: ["version-update:semver-major"]
     reviewers:
       - "@me"
     assignees:
