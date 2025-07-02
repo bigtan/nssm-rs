@@ -18,7 +18,7 @@ winresource = "0.1"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
-windows = { version = "0.58", features = [
+windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Services",
     "Win32_Security",  
@@ -31,7 +31,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_UI_WindowsAndMessaging",
 ] }
-windows-service = "0.7"
+windows-service = "0.8"
 log = "0.4"
 env_logger = "0.11"
 ctrlc = "3.4"
