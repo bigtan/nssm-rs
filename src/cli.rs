@@ -99,9 +99,12 @@ pub struct ServiceConfig {
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub start_type: ServiceStartType,
+    #[allow(dead_code)]
     pub object_name: Option<String>,
+    #[allow(dead_code)]
     pub dependencies: Vec<String>,
     pub app_priority: ProcessPriority,
+    #[allow(dead_code)]
     pub app_affinity: Option<String>,
     pub app_no_console: bool,
     pub app_stop_method_skip: u32,
@@ -114,10 +117,15 @@ pub struct ServiceConfig {
     pub app_stdout: Option<PathBuf>,
     pub app_stderr: Option<PathBuf>,
     pub app_stdin: Option<PathBuf>,
+    #[allow(dead_code)]
     pub app_rotate_files: bool,
+    #[allow(dead_code)]
     pub app_rotate_online: bool,
+    #[allow(dead_code)]
     pub app_rotate_seconds: u32,
+    #[allow(dead_code)]
     pub app_rotate_bytes: u64,
+    #[allow(dead_code)]
     pub app_environment: Vec<String>,
     pub app_environment_extra: Vec<String>,
 }
