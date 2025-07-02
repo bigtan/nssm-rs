@@ -28,7 +28,7 @@ fn main() {
             .unwrap()
             .as_secs();
         
-        println!("[{}] Application heartbeat #{}", timestamp, counter);
+        println!("[{timestamp}] Application heartbeat #{counter}");
 
         // Handle special arguments for testing
         if args.len() > 1 {
@@ -57,5 +57,5 @@ fn main() {
         thread::sleep(Duration::from_secs(2));
     }
 
-    println!("Application shutting down gracefully after {} heartbeats", counter);
+    println!("Application shutting down gracefully after {counter} heartbeats");
 }

@@ -16,8 +16,8 @@ impl ServiceManager {
         unsafe {
             let handle = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ALL_ACCESS)
                 .map_err(|e| {
-                    error!("Failed to open service control manager: {}", e);
-                    format!("Failed to open service control manager: {}", e)
+                    error!("Failed to open service control manager: {e}");
+                    format!("Failed to open service control manager: {e}")
                 })?;
 
             info!("ServiceManager created successfully");
@@ -31,9 +31,9 @@ impl ServiceManager {
         application: &PathBuf,
         arguments: &[String],
     ) -> Result<(), String> {
-        info!("Creating service configuration for '{}'", service_name);
-        debug!("Application: {:?}", application);
-        debug!("Arguments: {:?}", arguments);
+        info!("Creating service configuration for '{service_name}'");
+        debug!("Application: {application:?}");
+        debug!("Arguments: {arguments:?}");
 
         let config = ServiceConfig {
             application: application.clone(),
@@ -51,28 +51,28 @@ impl ServiceManager {
             ..Default::default()
         };
 
-        debug!("Service configuration created: {:?}", config);
+        debug!("Service configuration created: {config:?}");
         self.create_service(service_name, &config)
     }
 
     pub fn create_service(&self, service_name: &str, config: &ServiceConfig) -> Result<(), String> {
-        info!("Creating Windows service '{}'", service_name);
-        debug!("Service configuration: {:?}", config);
+        info!("Creating Windows service '{service_name}'");
+        debug!("Service configuration: {config:?}");
 
         unsafe {
             // Get current executable path (nssm-rs.exe)
             let nssm_path = std::env::current_exe().map_err(|e| {
-                error!("Failed to get current executable path: {}", e);
-                format!("Failed to get current executable path: {}", e)
+                error!("Failed to get current executable path: {e}");
+                format!("Failed to get current executable path: {e}")
             })?;
 
-            debug!("NSSM-RS executable path: {:?}", nssm_path);
+            debug!("NSSM-RS executable path: {nssm_path:?}");
 
             // Construct the service command line
             let service_command =
                 format!("\"{}\" run {}", nssm_path.to_string_lossy(), service_name);
 
-            debug!("Service command line: {}", service_command);
+            debug!("Service command line: {service_command}");
 
             let service_name_wide: Vec<u16> = service_name
                 .encode_utf16()
@@ -108,11 +108,11 @@ impl ServiceManager {
                 PCWSTR::null(),
             )
             .map_err(|e| {
-                error!("Failed to create Windows service '{}': {}", service_name, e);
-                format!("Failed to create service: {}", e)
+                error!("Failed to create Windows service '{service_name}': {e}");
+                format!("Failed to create service: {e}")
             })?;
 
-            info!("Windows service '{}' created successfully", service_name);
+            info!("Windows service '{service_name}' created successfully");
             let _ = CloseServiceHandle(service_handle);
         }
 
@@ -120,22 +120,19 @@ impl ServiceManager {
         info!("Saving service configuration to registry");
         self.save_service_config(service_name, config)?;
 
-        info!("Service '{}' installed successfully", service_name);
+        info!("Service '{service_name}' installed successfully");
         Ok(())
     }
 
     pub fn remove_service(&self, service_name: &str, confirm: bool) -> Result<(), String> {
-        info!("Attempting to remove service '{}'", service_name);
+        info!("Attempting to remove service '{service_name}'");
 
         if !confirm {
-            println!(
-                "Are you sure you want to remove service '{}'? (y/N)",
-                service_name
-            );
+            println!("Are you sure you want to remove service '{service_name}'? (y/N)");
             let mut input = String::new();
             std::io::stdin().read_line(&mut input).map_err(|e| {
-                error!("Failed to read user input: {}", e);
-                format!("Failed to read input: {}", e)
+                error!("Failed to read user input: {e}");
+                format!("Failed to read input: {e}")
             })?;
             if !input.trim().to_lowercase().starts_with('y') {
                 info!("Service removal cancelled by user");
@@ -154,17 +151,17 @@ impl ServiceManager {
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_ALL_ACCESS,
             )
-            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            .map_err(|e| format!("Failed to open service '{service_name}': {e}"))?;
 
             DeleteService(service_handle)
-                .map_err(|e| format!("Failed to delete service '{}': {}", service_name, e))?;
+                .map_err(|e| format!("Failed to delete service '{service_name}': {e}"))?;
             let _ = CloseServiceHandle(service_handle);
         }
 
         // Remove service configuration from registry
         self.remove_service_config(service_name)?;
 
-        info!("Service '{}' removed successfully", service_name);
+        info!("Service '{service_name}' removed successfully");
         Ok(())
     }
 
@@ -180,14 +177,14 @@ impl ServiceManager {
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_START,
             )
-            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            .map_err(|e| format!("Failed to open service '{service_name}': {e}"))?;
 
             StartServiceW(service_handle, None)
-                .map_err(|e| format!("Failed to start service '{}': {}", service_name, e))?;
+                .map_err(|e| format!("Failed to start service '{service_name}': {e}"))?;
             let _ = CloseServiceHandle(service_handle);
         }
 
-        info!("Service '{}' started successfully", service_name);
+        info!("Service '{service_name}' started successfully");
         Ok(())
     }
 
@@ -203,15 +200,15 @@ impl ServiceManager {
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_STOP,
             )
-            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            .map_err(|e| format!("Failed to open service '{service_name}': {e}"))?;
 
             let mut status = SERVICE_STATUS::default();
             ControlService(service_handle, SERVICE_CONTROL_STOP, &mut status)
-                .map_err(|e| format!("Failed to stop service '{}': {}", service_name, e))?;
+                .map_err(|e| format!("Failed to stop service '{service_name}': {e}"))?;
             let _ = CloseServiceHandle(service_handle);
         }
 
-        info!("Service '{}' stopped successfully", service_name);
+        info!("Service '{service_name}' stopped successfully");
         Ok(())
     }
 
@@ -257,11 +254,11 @@ impl ServiceManager {
             }
             "START" => {
                 config.start_type = ServiceStartType::from_str(value)
-                    .ok_or_else(|| format!("Invalid start type: {}", value))?;
+                    .ok_or_else(|| format!("Invalid start type: {value}"))?;
             }
             "APPPRIORITY" => {
                 config.app_priority = ProcessPriority::from_str(value)
-                    .ok_or_else(|| format!("Invalid priority: {}", value))?;
+                    .ok_or_else(|| format!("Invalid priority: {value}"))?;
             }
             "APPNOCONSOLE" => {
                 config.app_no_console = value != "0";
@@ -269,7 +266,7 @@ impl ServiceManager {
             "APPTHROTTLE" => {
                 config.app_throttle = value
                     .parse()
-                    .map_err(|_| format!("Invalid throttle value: {}", value))?;
+                    .map_err(|_| format!("Invalid throttle value: {value}"))?;
             }
             "APPSTDOUT" => {
                 config.app_stdout = if value.is_empty() {
@@ -295,42 +292,39 @@ impl ServiceManager {
             "APPSTOPMETHOD" => {
                 config.app_stop_method_skip = value
                     .parse()
-                    .map_err(|_| format!("Invalid stop method value: {}", value))?;
+                    .map_err(|_| format!("Invalid stop method value: {value}"))?;
             }
             "APPSTOPMETHOD_CONSOLE" => {
                 config.app_stop_method_console = value
                     .parse()
-                    .map_err(|_| format!("Invalid stop method console value: {}", value))?;
+                    .map_err(|_| format!("Invalid stop method console value: {value}"))?;
             }
             "APPSTOPMETHOD_WINDOW" => {
                 config.app_stop_method_window = value
                     .parse()
-                    .map_err(|_| format!("Invalid stop method window value: {}", value))?;
+                    .map_err(|_| format!("Invalid stop method window value: {value}"))?;
             }
             "APPSTOPMETHOD_THREADS" => {
                 config.app_stop_method_threads = value
                     .parse()
-                    .map_err(|_| format!("Invalid stop method threads value: {}", value))?;
+                    .map_err(|_| format!("Invalid stop method threads value: {value}"))?;
             }
             "APPRESTARTDELAY" => {
                 config.app_restart_delay = value
                     .parse()
-                    .map_err(|_| format!("Invalid restart delay value: {}", value))?;
+                    .map_err(|_| format!("Invalid restart delay value: {value}"))?;
             }
             "APPEXITACTION" => {
                 config.app_exit_default = crate::cli::ExitAction::from_str(value)
-                    .ok_or_else(|| format!("Invalid exit action: {}", value))?;
+                    .ok_or_else(|| format!("Invalid exit action: {value}"))?;
             }
             _ => {
-                return Err(format!("Unknown parameter: {}", parameter));
+                return Err(format!("Unknown parameter: {parameter}"));
             }
         }
 
         self.save_service_config(service_name, &config)?;
-        info!(
-            "Parameter '{}' set to '{}' for service '{}'",
-            parameter, value, service_name
-        );
+        info!("Parameter '{parameter}' set to '{value}' for service '{service_name}'");
         Ok(())
     }
 
@@ -384,11 +378,11 @@ impl ServiceManager {
             "APPRESTARTDELAY" => config.app_restart_delay.to_string(),
             "APPEXITACTION" => config.app_exit_default.to_str().to_string(),
             _ => {
-                return Err(format!("Unknown parameter: {}", parameter));
+                return Err(format!("Unknown parameter: {parameter}"));
             }
         };
 
-        println!("{}: {}", parameter, value);
+        println!("{parameter}: {value}");
         Ok(value)
     }
 
@@ -398,10 +392,8 @@ impl ServiceManager {
         config: &ServiceConfig,
     ) -> Result<(), String> {
         unsafe {
-            let key_path = format!(
-                "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
-                service_name
-            );
+            let key_path =
+                format!("SYSTEM\\CurrentControlSet\\Services\\{service_name}\\Parameters");
             let key_path_wide: Vec<u16> =
                 key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -497,10 +489,8 @@ impl ServiceManager {
 
     fn load_service_config(&self, service_name: &str) -> Result<ServiceConfig, String> {
         unsafe {
-            let key_path = format!(
-                "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
-                service_name
-            );
+            let key_path =
+                format!("SYSTEM\\CurrentControlSet\\Services\\{service_name}\\Parameters");
             let key_path_wide: Vec<u16> =
                 key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -515,8 +505,7 @@ impl ServiceManager {
 
             if result != ERROR_SUCCESS {
                 return Err(format!(
-                    "Failed to open registry key for service '{}'",
-                    service_name
+                    "Failed to open registry key for service '{service_name}'"
                 ));
             }
 
@@ -621,10 +610,8 @@ impl ServiceManager {
 
     fn remove_service_config(&self, service_name: &str) -> Result<(), String> {
         unsafe {
-            let key_path = format!(
-                "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
-                service_name
-            );
+            let key_path =
+                format!("SYSTEM\\CurrentControlSet\\Services\\{service_name}\\Parameters");
             let key_path_wide: Vec<u16> =
                 key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -754,11 +741,11 @@ impl ServiceManager {
                 PCWSTR::from_raw(service_name_wide.as_ptr()),
                 SERVICE_QUERY_STATUS,
             )
-            .map_err(|e| format!("Failed to open service '{}': {}", service_name, e))?;
+            .map_err(|e| format!("Failed to open service '{service_name}': {e}"))?;
 
             let mut status = SERVICE_STATUS::default();
             QueryServiceStatus(service_handle, &mut status)
-                .map_err(|e| format!("Failed to query service status: {}", e))?;
+                .map_err(|e| format!("Failed to query service status: {e}"))?;
 
             let _ = CloseServiceHandle(service_handle);
 
@@ -773,8 +760,8 @@ impl ServiceManager {
                 _ => "UNKNOWN",
             };
 
-            println!("Service Name: {}", service_name);
-            println!("State: {}", state_str);
+            println!("Service Name: {service_name}");
+            println!("State: {state_str}");
             println!("Exit Code: {}", status.dwWin32ExitCode);
             println!(
                 "Service Specific Exit Code: {}",
@@ -838,7 +825,7 @@ impl ServiceManager {
 
                 // Check if this service has nssm-rs parameters
                 if self.has_nssm_config(&service_name) {
-                    println!("  {}", service_name);
+                    println!("  {service_name}");
                     found_any = true;
                 }
 
@@ -856,10 +843,7 @@ impl ServiceManager {
     }
 
     fn has_nssm_config(&self, service_name: &str) -> bool {
-        let key_path = format!(
-            "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
-            service_name
-        );
+        let key_path = format!("SYSTEM\\CurrentControlSet\\Services\\{service_name}\\Parameters");
         let key_path_wide: Vec<u16> = key_path.encode_utf16().chain(std::iter::once(0)).collect();
 
         unsafe {

@@ -37,7 +37,7 @@ pub fn run_service(service_name: String) -> windows_service::Result<()> {
 
 fn service_main(arguments: Vec<OsString>) {
     info!("Service main function started");
-    debug!("Service arguments: {:?}", arguments);
+    debug!("Service arguments: {arguments:?}");
 
     // Windows services don't start with a console, so we have to allocate one
     // in order to send ctrl-C to children.
@@ -50,20 +50,20 @@ fn service_main(arguments: Vec<OsString>) {
     }
 
     let service_name = arguments
-        .get(0)
+        .first()
         .and_then(|arg| arg.to_str())
         .unwrap_or("nssm-rs")
         .to_string();
 
-    info!("Running service: '{}'", service_name);
+    info!("Running service: '{service_name}'");
 
     if let Err(e) = run_service_main(service_name.clone()) {
-        error!("Service '{}' failed: {:?}", service_name, e);
+        error!("Service '{service_name}' failed: {e:?}");
     }
 }
 
 fn run_service_main(service_name: String) -> windows_service::Result<()> {
-    info!("Starting service main logic for: '{}'", service_name);
+    info!("Starting service main logic for: '{service_name}'");
 
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let mut service_exit_code = ServiceExitCode::NO_ERROR;
@@ -73,63 +73,50 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
             ServiceControl::Interrogate => {
-                debug!(
-                    "Service '{}' received interrogate event",
-                    service_name_for_handler
-                );
+                debug!("Service '{service_name_for_handler}' received interrogate event");
                 ServiceControlHandlerResult::NoError
             }
             ServiceControl::Stop => {
-                info!("Service '{}' received stop event", service_name_for_handler);
+                info!("Service '{service_name_for_handler}' received stop event");
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
             }
             ServiceControl::Shutdown => {
-                info!(
-                    "Service '{}' received shutdown event",
-                    service_name_for_handler
-                );
+                info!("Service '{service_name_for_handler}' received shutdown event");
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
             }
             _ => {
                 debug!(
-                    "Service '{}' received unhandled control event: {:?}",
-                    service_name_for_handler, control_event
+                    "Service '{service_name_for_handler}' received unhandled control event: {control_event:?}"
                 );
                 ServiceControlHandlerResult::NotImplemented
             }
         }
     };
 
-    info!("Registering service control handler for '{}'", service_name);
+    info!("Registering service control handler for '{service_name}'");
     let status_handle = service_control_handler::register(&service_name, event_handler)?;
 
     // Load service configuration
-    info!("Loading service configuration for '{}'", service_name);
+    info!("Loading service configuration for '{service_name}'");
     let service_manager = ServiceManager::new().map_err(|e| {
-        error!("Failed to create ServiceManager: {}", e);
-        windows_service::Error::Winapi(std::io::Error::new(std::io::ErrorKind::Other, e))
+        error!("Failed to create ServiceManager: {e}");
+        windows_service::Error::Winapi(std::io::Error::other(e))
     })?;
 
     let config = service_manager
         .load_service_config_for_run(&service_name)
         .map_err(|e| {
-            error!(
-                "Failed to load service configuration for '{}': {}",
-                service_name, e
-            );
-            windows_service::Error::Winapi(std::io::Error::new(std::io::ErrorKind::Other, e))
+            error!("Failed to load service configuration for '{service_name}': {e}");
+            windows_service::Error::Winapi(std::io::Error::other(e))
         })?;
 
-    info!(
-        "Service configuration loaded successfully for '{}'",
-        service_name
-    );
-    debug!("Configuration: {:?}", config);
+    info!("Service configuration loaded successfully for '{service_name}'");
+    debug!("Configuration: {config:?}");
 
     // Set service status to running
-    info!("Setting service '{}' status to Running", service_name);
+    info!("Setting service '{service_name}' status to Running");
     status_handle.set_service_status(ServiceStatus {
         service_type: SERVICE_TYPE,
         current_state: ServiceState::Running,
@@ -163,7 +150,7 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
             let now = Instant::now();
             if now < delay_until {
                 let sleep_duration = (delay_until - now).min(Duration::from_millis(100));
-                debug!("Sleeping for restart delay: {:?}", sleep_duration);
+                debug!("Sleeping for restart delay: {sleep_duration:?}");
 
                 match shutdown_rx.recv_timeout(sleep_duration) {
                     Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -220,14 +207,14 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
-                error!("Failed to launch application: {}", e);
+                error!("Failed to launch application: {e}");
                 service_exit_code = ServiceExitCode::ServiceSpecific(1);
                 break 'outer;
             }
         };
 
         let child_id = child.id();
-        info!("Application launched with PID: {}", child_id);
+        info!("Application launched with PID: {child_id}");
 
         // Set process priority for the child process
         unsafe {
@@ -304,10 +291,7 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
                 }
                 Ok(ProcessStatus::Exited(exit_code)) => {
                     let runtime = start_time.elapsed();
-                    info!(
-                        "Application exited with code {} after {:?}",
-                        exit_code, runtime
-                    );
+                    info!("Application exited with code {exit_code} after {runtime:?}");
 
                     service_exit_code = if exit_code == 0 {
                         ServiceExitCode::NO_ERROR
@@ -328,7 +312,7 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
                         };
 
                         if throttle_delay.as_millis() > 0 {
-                            info!("Scheduling restart in {:?}", throttle_delay);
+                            info!("Scheduling restart in {throttle_delay:?}");
                             restart_after = Some(Instant::now() + throttle_delay);
                         }
 
@@ -350,7 +334,7 @@ fn run_service_main(service_name: String) -> windows_service::Result<()> {
                     break 'inner;
                 }
                 Err(e) => {
-                    error!("Error checking process status: {}", e);
+                    error!("Error checking process status: {e}");
                     service_exit_code = ServiceExitCode::ServiceSpecific(1);
                     break 'outer;
                 }
@@ -519,7 +503,7 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
     if (config.app_stop_method_skip & 8) == 0 {
         info!("Killing child process");
         if let Err(e) = child.kill() {
-            warn!("Failed to kill child process: {}", e);
+            warn!("Failed to kill child process: {e}");
         }
     }
 
@@ -542,8 +526,8 @@ fn handle_stdout(stdout: std::process::ChildStdout, output_path: Option<std::pat
                 for line in reader.lines() {
                     match line {
                         Ok(line) => {
-                            info!("stdout: {}", line);
-                            if writeln!(file, "{}", line).is_err() {
+                            info!("stdout: {line}");
+                            if writeln!(file, "{line}").is_err() {
                                 error!("Failed to write to stdout file");
                                 break;
                             }
@@ -553,14 +537,14 @@ fn handle_stdout(stdout: std::process::ChildStdout, output_path: Option<std::pat
                 }
             }
             Err(e) => {
-                error!("Failed to open stdout file {:?}: {}", path, e);
+                error!("Failed to open stdout file {path:?}: {e}");
             }
         }
     } else {
         // Just log to service log
         for line in reader.lines() {
             match line {
-                Ok(line) => info!("stdout: {}", line),
+                Ok(line) => info!("stdout: {line}"),
                 Err(_) => break,
             }
         }
@@ -581,8 +565,8 @@ fn handle_stderr(stderr: std::process::ChildStderr, output_path: Option<std::pat
                 for line in reader.lines() {
                     match line {
                         Ok(line) => {
-                            warn!("stderr: {}", line);
-                            if writeln!(file, "{}", line).is_err() {
+                            warn!("stderr: {line}");
+                            if writeln!(file, "{line}").is_err() {
                                 error!("Failed to write to stderr file");
                                 break;
                             }
@@ -592,14 +576,14 @@ fn handle_stderr(stderr: std::process::ChildStderr, output_path: Option<std::pat
                 }
             }
             Err(e) => {
-                error!("Failed to open stderr file {:?}: {}", path, e);
+                error!("Failed to open stderr file {path:?}: {e}");
             }
         }
     } else {
         // Just log to service log
         for line in reader.lines() {
             match line {
-                Ok(line) => warn!("stderr: {}", line),
+                Ok(line) => warn!("stderr: {line}"),
                 Err(_) => break,
             }
         }
@@ -610,9 +594,9 @@ fn parse_command_line(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current_arg = String::new();
     let mut in_quotes = false;
-    let mut chars = input.chars().peekable();
+    let chars = input.chars().peekable();
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         match ch {
             '"' => {
                 in_quotes = !in_quotes;

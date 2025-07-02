@@ -57,12 +57,9 @@ fn main() {
             application,
             arguments,
         } => {
-            info!(
-                "Installing service '{}' with application: {:?}",
-                service_name, application
-            );
+            info!("Installing service '{service_name}' with application: {application:?}");
             if !arguments.is_empty() {
-                info!("Application arguments: {:?}", arguments);
+                info!("Application arguments: {arguments:?}");
             }
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.install_service(&service_name, &application, &arguments)
@@ -71,7 +68,7 @@ fn main() {
             service_name,
             confirm,
         } => {
-            info!("Removing service '{}'", service_name);
+            info!("Removing service '{service_name}'");
             if !confirm {
                 info!("Confirmation will be required");
             }
@@ -79,21 +76,21 @@ fn main() {
             service_manager.remove_service(&service_name, confirm)
         }
         Commands::Start { service_name } => {
-            info!("Starting service '{}'", service_name);
+            info!("Starting service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.start_service(&service_name)
         }
         Commands::Stop { service_name } => {
-            info!("Stopping service '{}'", service_name);
+            info!("Stopping service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.stop_service(&service_name)
         }
         Commands::Restart { service_name } => {
-            info!("Restarting service '{}'", service_name);
+            info!("Restarting service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             info!("Stopping service first...");
             if let Err(e) = service_manager.stop_service(&service_name) {
-                error!("Failed to stop service: {}", e);
+                error!("Failed to stop service: {e}");
             }
             info!("Waiting 2 seconds before starting...");
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -105,10 +102,7 @@ fn main() {
             parameter,
             value,
         } => {
-            info!(
-                "Setting parameter '{}' = '{}' for service '{}'",
-                parameter, value, service_name
-            );
+            info!("Setting parameter '{parameter}' = '{value}' for service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.set_service_parameter(&service_name, &parameter, &value)
         }
@@ -116,10 +110,7 @@ fn main() {
             service_name,
             parameter,
         } => {
-            info!(
-                "Getting parameter '{}' for service '{}'",
-                parameter, service_name
-            );
+            info!("Getting parameter '{parameter}' for service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager
                 .get_service_parameter(&service_name, &parameter)
@@ -129,18 +120,15 @@ fn main() {
             service_name,
             parameter,
         } => {
-            info!(
-                "Resetting parameter '{}' for service '{}'",
-                parameter, service_name
-            );
+            info!("Resetting parameter '{parameter}' for service '{service_name}'");
             // Reset to default value
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             let default_value = get_default_parameter_value(&parameter);
-            info!("Default value for '{}': '{}'", parameter, default_value);
+            info!("Default value for '{parameter}': '{default_value}'");
             service_manager.set_service_parameter(&service_name, &parameter, &default_value)
         }
         Commands::Status { service_name } => {
-            info!("Querying status for service '{}'", service_name);
+            info!("Querying status for service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             service_manager.query_service_status(&service_name)
         }
@@ -150,17 +138,17 @@ fn main() {
             service_manager.list_nssm_services()
         }
         Commands::Run { name } => {
-            info!("Running as service: '{}'", name);
+            info!("Running as service: '{name}'");
             let service_name = name.clone();
             match run_service(name) {
                 Ok(()) => {
-                    info!("Service '{}' completed successfully", service_name);
+                    info!("Service '{service_name}' completed successfully");
                     Ok(())
                 }
                 Err(e) => {
-                    error!("Service '{}' failed: {:?}", service_name, e);
+                    error!("Service '{service_name}' failed: {e:?}");
                     // Try to print to console in case this was run directly
-                    eprintln!("Service failed: {:?}", e);
+                    eprintln!("Service failed: {e:?}");
                     std::process::exit(1);
                 }
             }
@@ -172,12 +160,12 @@ fn main() {
             info!("Operation completed successfully");
         }
         Err(e) => {
-            error!("Operation failed: {}", e);
-            eprintln!("Error: {}", e);
+            error!("Operation failed: {e}");
+            eprintln!("Error: {e}");
         }
     }
 
-    if let Err(_) = result {
+    if result.is_err() {
         std::process::exit(1);
     }
 
