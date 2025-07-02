@@ -5,11 +5,11 @@ use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::Win32::System::Console::{AllocConsole, CTRL_C_EVENT};
-use windows::Win32::System::Threading::{SetPriorityClass, PROCESS_CREATION_FLAGS};
+use windows::Win32::System::Threading::{PROCESS_CREATION_FLAGS, SetPriorityClass};
 use windows_service::{
     define_windows_service,
     service::{
@@ -436,18 +436,20 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
             };
 
             unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-                let target_pid = lparam.0 as u32;
-                let mut window_pid = 0u32;
-                GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
-                if window_pid == target_pid {
-                    let _ = PostMessageW(
-                        hwnd,
-                        WM_CLOSE,
-                        windows::Win32::Foundation::WPARAM(0),
-                        LPARAM(0),
-                    );
+                unsafe {
+                    let target_pid = lparam.0 as u32;
+                    let mut window_pid = 0u32;
+                    GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
+                    if window_pid == target_pid {
+                        let _ = PostMessageW(
+                            hwnd,
+                            WM_CLOSE,
+                            windows::Win32::Foundation::WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                    BOOL::from(true)
                 }
-                BOOL::from(true)
             }
 
             let _ = EnumWindows(Some(enum_window_proc), LPARAM(child_id as isize));
@@ -474,7 +476,7 @@ fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Ar
         info!("Terminating child process threads");
         unsafe {
             use windows::Win32::System::Threading::{
-                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+                OpenProcess, PROCESS_TERMINATE, TerminateProcess,
             };
 
             if let Ok(process_handle) = OpenProcess(PROCESS_TERMINATE, false, child_id) {
