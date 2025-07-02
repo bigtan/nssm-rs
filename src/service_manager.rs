@@ -1,10 +1,10 @@
 use crate::cli::{ProcessPriority, ServiceConfig, ServiceStartType};
 use log::{debug, error, info, warn};
 use std::path::PathBuf;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::Services::*;
+use windows::core::PCWSTR;
 
 pub struct ServiceManager {
     handle: SC_HANDLE,
