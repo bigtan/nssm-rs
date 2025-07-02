@@ -244,3 +244,14 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Dependency Management
+
+This project uses GitHub Dependabot to automatically keep dependencies up to date:
+
+- **Cargo Dependencies**: Automatically checks for Rust crate updates weekly
+- **GitHub Actions**: Monitors CI/CD workflow dependencies
+- **Grouped Updates**: Minor and patch updates are grouped together to reduce PR noise
+- **Automated Reviews**: PRs are automatically assigned for review
+
+Dependabot configuration is located in `.github/dependabot.yml`.
