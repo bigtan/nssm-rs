@@ -162,7 +162,7 @@ impl Default for ServiceConfig {
             app_parameters: None,
             display_name: None,
             description: None,
-            start_type: ServiceStartType::Manual,
+            start_type: ServiceStartType::Auto,
             object_name: None,
             dependencies: Vec::new(),
             app_priority: ProcessPriority::Normal,
