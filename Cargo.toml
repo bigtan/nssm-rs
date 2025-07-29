@@ -17,7 +17,7 @@ LegalCopyright = "Copyright (c) 2025"
 winresource = "0.1"
 
 [dependencies]
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Services",
