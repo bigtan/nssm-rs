@@ -110,10 +110,8 @@ jobs:
           | File | SHA256 |
           |------|--------|
           | nssm-rs-windows-x64.zip | `${{ hashFiles('./nssm-rs-windows-x64.zip') }}` |
-          | nssm-rs.exe | `${{ hashFiles('./target/release/nssm-rs.exe') }}` |
         draft: false
         prerelease: false
         files: |
           nssm-rs-windows-x64.zip
-          target/release/nssm-rs.exe
         token: ${{ secrets.GITHUB_TOKEN }}
