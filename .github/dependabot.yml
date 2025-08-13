@@ -30,14 +30,13 @@ updates:
     # ignore:
     #   - dependency-name: "windows"
     #     update-types: ["version-update:semver-major"]
-    reviewers:
-      - "@me"
+    # reviewers:
+    #   - "bigtan"
     assignees:
-      - "@me"
+      - "bigtan"
     labels:
-      - "dependencies"
-      - "rust"
-      - "cargo"
+      - "Dependabot"
+
 
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"
@@ -51,11 +50,9 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
-    reviewers:
-      - "@me"
+    # reviewers:
+    #   - "bigtan"
     assignees:
-      - "@me"
+      - "bigtan"
     labels:
-      - "dependencies"
-      - "github-actions"
-      - "ci"
+        - "Dependabot"
