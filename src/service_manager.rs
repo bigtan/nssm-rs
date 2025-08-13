@@ -517,18 +517,16 @@ impl ServiceManager {
             }
 
             // Load app directory
-            if let Ok(app_dir) = self.get_registry_string(&key_handle, "AppDirectory") {
-                if !app_dir.is_empty() {
+            if let Ok(app_dir) = self.get_registry_string(&key_handle, "AppDirectory")
+                && !app_dir.is_empty() {
                     config.app_directory = Some(PathBuf::from(app_dir));
                 }
-            }
 
             // Load app parameters
-            if let Ok(params) = self.get_registry_string(&key_handle, "AppParameters") {
-                if !params.is_empty() {
+            if let Ok(params) = self.get_registry_string(&key_handle, "AppParameters")
+                && !params.is_empty() {
                     config.app_parameters = Some(params);
                 }
-            }
 
             // Load other settings
             if let Ok(priority) = self.get_registry_dword(&key_handle, "AppPriority") {
@@ -578,30 +576,26 @@ impl ServiceManager {
                 config.app_restart_delay = restart_delay;
             }
 
-            if let Ok(exit_default) = self.get_registry_string(&key_handle, "AppExitDefault") {
-                if let Some(exit_action) = crate::cli::ExitAction::from_str(&exit_default) {
+            if let Ok(exit_default) = self.get_registry_string(&key_handle, "AppExitDefault")
+                && let Some(exit_action) = crate::cli::ExitAction::from_str(&exit_default) {
                     config.app_exit_default = exit_action;
                 }
-            }
 
             // Load I/O redirection settings
-            if let Ok(stdout_path) = self.get_registry_string(&key_handle, "AppStdout") {
-                if !stdout_path.is_empty() {
+            if let Ok(stdout_path) = self.get_registry_string(&key_handle, "AppStdout")
+                && !stdout_path.is_empty() {
                     config.app_stdout = Some(PathBuf::from(stdout_path));
                 }
-            }
 
-            if let Ok(stderr_path) = self.get_registry_string(&key_handle, "AppStderr") {
-                if !stderr_path.is_empty() {
+            if let Ok(stderr_path) = self.get_registry_string(&key_handle, "AppStderr")
+                && !stderr_path.is_empty() {
                     config.app_stderr = Some(PathBuf::from(stderr_path));
                 }
-            }
 
-            if let Ok(stdin_path) = self.get_registry_string(&key_handle, "AppStdin") {
-                if !stdin_path.is_empty() {
+            if let Ok(stdin_path) = self.get_registry_string(&key_handle, "AppStdin")
+                && !stdin_path.is_empty() {
                     config.app_stdin = Some(PathBuf::from(stdin_path));
                 }
-            }
 
             let _ = RegCloseKey(key_handle);
             Ok(config)
