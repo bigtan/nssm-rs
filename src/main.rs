@@ -89,13 +89,21 @@ fn main() {
             info!("Restarting service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             info!("Stopping service first...");
-            if let Err(e) = service_manager.stop_service(&service_name) {
-                error!("Failed to stop service: {e}");
+            
+            // Stop the service first, return error if it fails
+            match service_manager.stop_service(&service_name) {
+                Ok(_) => {
+                    info!("Service stopped successfully");
+                    info!("Waiting 2 seconds before starting...");
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    info!("Starting service...");
+                    service_manager.start_service(&service_name)
+                }
+                Err(e) => {
+                    error!("Failed to stop service: {e}");
+                    Err(e)
+                }
             }
-            info!("Waiting 2 seconds before starting...");
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            info!("Starting service...");
-            service_manager.start_service(&service_name)
         }
         Commands::Set {
             service_name,
