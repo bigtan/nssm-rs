@@ -89,7 +89,7 @@ fn main() {
             info!("Restarting service '{service_name}'");
             let service_manager = ServiceManager::new().expect("Failed to create service manager");
             info!("Stopping service first...");
-            
+
             // Stop the service first, return error if it fails
             match service_manager.stop_service(&service_name) {
                 Ok(_) => {
