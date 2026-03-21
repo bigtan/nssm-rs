@@ -3,115 +3,99 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g., v1.0.0)'
+        description: "Release tag (e.g., v1.0.0)"
         required: true
         type: string
-
-permissions:
-  contents: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-release:
+  build:
+    name: Build (windows-latest)
     runs-on: windows-latest
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
-      
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: stable
-        
-    - name: Cache Cargo registry
-      uses: actions/cache@v5
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
-          
-    - name: Install dependencies
-      run: cargo fetch
-      
-    - name: Run tests
-      run: cargo test --verbose
-      
-    - name: Build release
-      run: cargo build --release --verbose
-      
-    - name: Create release directory
-      run: |
-        mkdir release-artifacts
-        cp target/release/nssm-rs.exe release-artifacts/
-        cp README.md release-artifacts/
-        cp USAGE.md release-artifacts/
-        cp LOGGING.md release-artifacts/
-        
-    - name: Create ZIP archive
-      run: |
-        cd release-artifacts
-        Compress-Archive -Path * -DestinationPath ../nssm-rs-windows-x64.zip
-        cd ..
-        
-    - name: Get release tag
-      id: get_tag
-      run: |
-        if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
-          $tag = "${{ github.event.inputs.tag }}"
-        } else {
-          $tag = $env:GITHUB_REF -replace "refs/tags/", ""
-        }
-        echo "tag=$tag" >> $env:GITHUB_OUTPUT
-        echo "Release tag: $tag"
-        
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.get_tag.outputs.tag }}
-        name: Release ${{ steps.get_tag.outputs.tag }}
-        body: |
-          ## Changes in this Release
-          
-          ### Features
-          - Service installation and management
-          - Service start/stop/restart operations
-          - Parameter configuration and querying
-          - Service status monitoring
-          - List managed services
-          
-          ### Download
-          - Download `nssm-rs-windows-x64.zip` for Windows x64
-          - Extract and run `nssm-rs.exe` with administrator privileges
-          
-          ### Installation
-          ```bash
-          # Install a service
-          nssm-rs.exe install MyService "C:\path\to\your\app.exe"
-          
-          # Start the service
-          nssm-rs.exe start MyService
-          ```
-          
-          For more usage information, see the included documentation files.
-          
-          ## Checksums
-          
-          | File | SHA256 |
-          |------|--------|
-          | nssm-rs-windows-x64.zip | `${{ hashFiles('./nssm-rs-windows-x64.zip') }}` |
-        draft: false
-        prerelease: false
-        files: |
-          nssm-rs-windows-x64.zip
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Prepare binary archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          Copy-Item target/release/nssm-rs.exe release-artifacts/
+          Copy-Item README.md release-artifacts/
+          Copy-Item USAGE.md release-artifacts/
+          Copy-Item LOGGING.md release-artifacts/
+          Compress-Archive -Path release-artifacts/* -DestinationPath nssm-rs-windows-x64.zip -Force
+
+      - name: Upload zipped binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: nssm-rs-windows-latest
+          path: nssm-rs-windows-x64.zip
+          retention-days: 7
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download zipped binary
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Get release tag
+        id: get_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate changelog
+        id: git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.tag }}
+          name: Release ${{ steps.get_tag.outputs.tag }}
+          files: dist/**/*.zip
+          body: ${{ steps.git-cliff.outputs.content }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
