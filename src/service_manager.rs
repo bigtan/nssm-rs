@@ -30,13 +30,13 @@ impl ServiceManager {
     pub fn install_service(
         &self,
         service_name: &str,
-        application: &PathBuf,
+        application: &Path,
         arguments: &[String],
     ) -> AppResult<()> {
         info!("Creating service configuration for '{service_name}'");
 
         let config = ServiceConfig {
-            application: application.clone(),
+            application: application.to_path_buf(),
             app_directory: Some(
                 application
                     .parent()
