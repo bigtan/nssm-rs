@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,8 +9,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use log::{debug, error, info, warn};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::Console::{AllocConsole, CTRL_C_EVENT};
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
+};
 use windows::Win32::System::Threading::{PROCESS_CREATION_FLAGS, SetPriorityClass};
+use windows::core::PCWSTR;
 use windows_service::{
     define_windows_service,
     service::{
@@ -33,6 +41,7 @@ enum ProcessStatus {
     Running,
     Exited(i32),
     Terminated,
+    Unknown(std::io::Error),
 }
 
 enum LoopControl {
@@ -42,8 +51,21 @@ enum LoopControl {
 
 struct RunningChild {
     child: Child,
+    _job: ChildJob,
     stdout_thread: Option<thread::JoinHandle<()>>,
     stderr_thread: Option<thread::JoinHandle<()>>,
+}
+
+struct ChildJob {
+    handle: HANDLE,
+}
+
+impl Drop for ChildJob {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.handle);
+        }
+    }
 }
 
 pub fn run_service(service_name: String) -> AppResult<()> {
@@ -221,6 +243,18 @@ fn launch_child(config: &ServiceConfig) -> AppResult<RunningChild> {
     let child_id = child.id();
     info!("Application launched with PID: {child_id}");
 
+    let job = match create_child_job().and_then(|job| {
+        assign_child_to_job(&job, &child)?;
+        Ok(job)
+    }) {
+        Ok(job) => job,
+        Err(error) => {
+            error!("Failed to attach child process {child_id} to cleanup job: {error}");
+            kill_child_after_launch_failure(&mut child);
+            return Err(error);
+        }
+    };
+
     set_child_priority(child_id, config)?;
 
     let stdout_thread = spawn_output_thread(child.stdout.take(), config.app_stdout.clone(), false);
@@ -228,9 +262,47 @@ fn launch_child(config: &ServiceConfig) -> AppResult<RunningChild> {
 
     Ok(RunningChild {
         child,
+        _job: job,
         stdout_thread,
         stderr_thread,
     })
+}
+
+fn create_child_job() -> AppResult<ChildJob> {
+    unsafe {
+        let job = ChildJob {
+            handle: CreateJobObjectW(None, PCWSTR::null())?,
+        };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        SetInformationJobObject(
+            job.handle,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )?;
+
+        Ok(job)
+    }
+}
+
+fn assign_child_to_job(job: &ChildJob, child: &Child) -> AppResult<()> {
+    unsafe {
+        AssignProcessToJobObject(job.handle, HANDLE(child.as_raw_handle()))?;
+    }
+
+    Ok(())
+}
+
+fn kill_child_after_launch_failure(child: &mut Child) {
+    if let Err(error) = child.kill() {
+        warn!(
+            "Failed to kill child process {} after launch setup failed: {error}",
+            child.id()
+        );
+    }
+    let _ = child.wait();
 }
 
 fn build_command(config: &ServiceConfig) -> Command {
@@ -333,7 +405,7 @@ fn monitor_child(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
 
-        match check_process_status(child)? {
+        match check_process_status(child) {
             ProcessStatus::Running => continue,
             ProcessStatus::Exited(exit_code) => {
                 let runtime = start_time.elapsed();
@@ -355,6 +427,12 @@ fn monitor_child(
                     Some(Instant::now() + Duration::from_millis(config.app_throttle as u64)),
                     ServiceExitCode::ServiceSpecific(259),
                 ));
+            }
+            ProcessStatus::Unknown(error) => {
+                error!("Failed to query child process status: {error}");
+                set_stop_pending_status(status_handle)?;
+                stop_child_process(child, config, stop_ctrlc);
+                return Ok(LoopControl::Exit(ServiceExitCode::ServiceSpecific(1)));
             }
         }
     }
@@ -394,13 +472,14 @@ fn finalize_child_threads(running_child: RunningChild) {
     }
 }
 
-fn check_process_status(child: &mut Child) -> AppResult<ProcessStatus> {
-    match child.try_wait()? {
-        None => Ok(ProcessStatus::Running),
-        Some(status) => match status.code() {
-            Some(code) => Ok(ProcessStatus::Exited(code)),
-            None => Ok(ProcessStatus::Terminated),
+fn check_process_status(child: &mut Child) -> ProcessStatus {
+    match child.try_wait() {
+        Ok(None) => ProcessStatus::Running,
+        Ok(Some(status)) => match status.code() {
+            Some(code) => ProcessStatus::Exited(code),
+            None => ProcessStatus::Terminated,
         },
+        Err(error) => ProcessStatus::Unknown(error),
     }
 }
 
@@ -525,7 +604,7 @@ fn wait_for_process_exit(child: &mut Child, timeout_ms: u32) -> bool {
     let start = Instant::now();
     while start.elapsed().as_millis() < timeout_ms as u128 {
         match check_process_status(child) {
-            Ok(ProcessStatus::Running) => thread::sleep(Duration::from_millis(50)),
+            ProcessStatus::Running => thread::sleep(Duration::from_millis(50)),
             _ => return true,
         }
     }
