@@ -113,6 +113,12 @@ fn execute_command(service_manager: &ServiceManager, command: Commands) -> AppRe
             parameter,
         } => {
             let parameter = ServiceParameter::parse(&parameter)?;
+            if parameter == ServiceParameter::Application {
+                return Err(error::AppError::Message(
+                    "APPLICATION cannot be reset to an empty value; set a new path instead"
+                        .to_string(),
+                ));
+            }
             let default_value = parameter.default_value();
             info!(
                 "Resetting parameter '{}' for service '{}' to '{}'",

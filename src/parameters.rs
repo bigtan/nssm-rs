@@ -60,7 +60,7 @@ impl ServiceParameter {
             | Self::AppStdout
             | Self::AppStderr
             | Self::AppStdin => String::new(),
-            Self::Start => "SERVICE_DEMAND_START".to_string(),
+            Self::Start => "SERVICE_AUTO_START".to_string(),
             Self::AppPriority => "NORMAL_PRIORITY_CLASS".to_string(),
             Self::AppNoConsole => "0".to_string(),
             Self::AppThrottle => "1500".to_string(),
@@ -76,6 +76,12 @@ impl ServiceParameter {
     pub fn apply(self, config: &mut ServiceConfig, value: &str) -> AppResult<()> {
         match self {
             Self::Application => {
+                if value.is_empty() {
+                    return Err(AppError::InvalidParameterValue {
+                        parameter: self.as_str().to_string(),
+                        value: value.to_string(),
+                    });
+                }
                 config.application = PathBuf::from(value);
             }
             Self::AppDirectory => {

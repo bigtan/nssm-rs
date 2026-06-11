@@ -7,7 +7,9 @@ use windows::Win32::System::Registry::{KEY_READ, KEY_WRITE};
 use windows::Win32::System::Services::*;
 use windows::core::PCWSTR;
 
-use crate::config::{ProcessPriority, ServiceConfig};
+use windows::core::PWSTR;
+
+use crate::config::{ProcessPriority, ServiceConfig, ServiceStartType};
 use crate::error::{AppError, AppResult};
 use crate::parameters::ServiceParameter;
 use crate::registry::{RegistryKey, to_wide};
@@ -94,6 +96,10 @@ impl ServiceManager {
             let _ = CloseServiceHandle(service_handle);
         }
 
+        if let Some(description) = &config.description {
+            self.set_scm_description(service_name, description)?;
+        }
+
         self.save_service_config(service_name, config)?;
         info!("Service '{service_name}' installed successfully");
         Ok(())
@@ -154,9 +160,24 @@ impl ServiceManager {
         value: &str,
     ) -> AppResult<()> {
         let parameter = ServiceParameter::parse(parameter)?;
-        let mut config = self.load_service_config(service_name)?;
-        parameter.apply(&mut config, value)?;
-        self.save_service_config(service_name, &config)?;
+        match parameter {
+            ServiceParameter::Start => {
+                let start_type = ServiceStartType::from_str(value).ok_or_else(|| {
+                    AppError::InvalidParameterValue {
+                        parameter: parameter.as_str().to_string(),
+                        value: value.to_string(),
+                    }
+                })?;
+                self.set_scm_start_type(service_name, start_type)?;
+            }
+            ServiceParameter::DisplayName => self.set_scm_display_name(service_name, value)?,
+            ServiceParameter::Description => self.set_scm_description(service_name, value)?,
+            _ => {
+                let mut config = self.load_service_config(service_name)?;
+                parameter.apply(&mut config, value)?;
+                self.save_service_config(service_name, &config)?;
+            }
+        }
 
         info!(
             "Parameter '{}' set to '{}' for service '{}'",
@@ -169,10 +190,119 @@ impl ServiceManager {
 
     pub fn get_service_parameter(&self, service_name: &str, parameter: &str) -> AppResult<String> {
         let parameter = ServiceParameter::parse(parameter)?;
-        let config = self.load_service_config(service_name)?;
-        let value = parameter.read(&config);
+        let value = match parameter {
+            ServiceParameter::Start => {
+                let (start_type, _) = self.query_scm_config(service_name)?;
+                match ServiceStartType::from_windows_value(start_type) {
+                    Some(start_type) => start_type.as_cli_value().to_string(),
+                    None => start_type.to_string(),
+                }
+            }
+            ServiceParameter::DisplayName => self.query_scm_config(service_name)?.1,
+            ServiceParameter::Description => self.query_scm_description(service_name)?,
+            _ => {
+                let config = self.load_service_config(service_name)?;
+                parameter.read(&config)
+            }
+        };
         println!("{}: {}", parameter.as_str(), value);
         Ok(value)
+    }
+
+    fn set_scm_start_type(
+        &self,
+        service_name: &str,
+        start_type: ServiceStartType,
+    ) -> AppResult<()> {
+        self.with_service_handle(service_name, SERVICE_CHANGE_CONFIG, |handle| unsafe {
+            ChangeServiceConfigW(
+                handle,
+                ENUM_SERVICE_TYPE(SERVICE_NO_CHANGE),
+                SERVICE_START_TYPE(start_type.to_windows_value()),
+                SERVICE_ERROR(SERVICE_NO_CHANGE),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                None,
+                PCWSTR::null(),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                PCWSTR::null(),
+            )?;
+            Ok(())
+        })
+    }
+
+    fn set_scm_display_name(&self, service_name: &str, display_name: &str) -> AppResult<()> {
+        let display_name_wide = to_wide(display_name);
+        self.with_service_handle(service_name, SERVICE_CHANGE_CONFIG, |handle| unsafe {
+            ChangeServiceConfigW(
+                handle,
+                ENUM_SERVICE_TYPE(SERVICE_NO_CHANGE),
+                SERVICE_START_TYPE(SERVICE_NO_CHANGE),
+                SERVICE_ERROR(SERVICE_NO_CHANGE),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                None,
+                PCWSTR::null(),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                PCWSTR::from_raw(display_name_wide.as_ptr()),
+            )?;
+            Ok(())
+        })
+    }
+
+    fn set_scm_description(&self, service_name: &str, description: &str) -> AppResult<()> {
+        let description_wide = to_wide(description);
+        self.with_service_handle(service_name, SERVICE_CHANGE_CONFIG, |handle| unsafe {
+            let info = SERVICE_DESCRIPTIONW {
+                lpDescription: PWSTR::from_raw(description_wide.as_ptr() as *mut u16),
+            };
+            ChangeServiceConfig2W(
+                handle,
+                SERVICE_CONFIG_DESCRIPTION,
+                Some(&info as *const _ as *const core::ffi::c_void),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Returns the raw SCM start type value and the display name.
+    fn query_scm_config(&self, service_name: &str) -> AppResult<(u32, String)> {
+        self.with_service_handle(service_name, SERVICE_QUERY_CONFIG, |handle| unsafe {
+            let mut needed = 0u32;
+            let _ = QueryServiceConfigW(handle, None, 0, &mut needed);
+            // Use u64 storage so the buffer is aligned for QUERY_SERVICE_CONFIGW.
+            let mut buffer = vec![0u64; needed.div_ceil(8) as usize];
+            QueryServiceConfigW(
+                handle,
+                Some(buffer.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW),
+                needed,
+                &mut needed,
+            )?;
+            let config = &*(buffer.as_ptr() as *const QUERY_SERVICE_CONFIGW);
+            Ok((config.dwStartType.0, pwstr_to_string(config.lpDisplayName)))
+        })
+    }
+
+    fn query_scm_description(&self, service_name: &str) -> AppResult<String> {
+        self.with_service_handle(service_name, SERVICE_QUERY_CONFIG, |handle| unsafe {
+            let mut needed = 0u32;
+            let _ = QueryServiceConfig2W(handle, SERVICE_CONFIG_DESCRIPTION, None, &mut needed);
+            let mut buffer = vec![0u64; needed.div_ceil(8) as usize];
+            let bytes = std::slice::from_raw_parts_mut(
+                buffer.as_mut_ptr() as *mut u8,
+                needed as usize,
+            );
+            QueryServiceConfig2W(
+                handle,
+                SERVICE_CONFIG_DESCRIPTION,
+                Some(bytes),
+                &mut needed,
+            )?;
+            let info = &*(buffer.as_ptr() as *const SERVICE_DESCRIPTIONW);
+            Ok(pwstr_to_string(info.lpDescription))
+        })
     }
 
     fn save_service_config(&self, service_name: &str, config: &ServiceConfig) -> AppResult<()> {
@@ -360,6 +490,14 @@ impl Drop for ServiceManager {
         unsafe {
             let _ = CloseServiceHandle(self.handle);
         }
+    }
+}
+
+fn pwstr_to_string(value: PWSTR) -> String {
+    if value.is_null() {
+        String::new()
+    } else {
+        unsafe { value.to_string().unwrap_or_default() }
     }
 }
 

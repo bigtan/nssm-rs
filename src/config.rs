@@ -106,6 +106,15 @@ impl ServiceStartType {
         }
     }
 
+    pub fn from_windows_value(value: u32) -> Option<Self> {
+        match value {
+            2 => Some(Self::Auto),
+            3 => Some(Self::Manual),
+            4 => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "AUTO" | "SERVICE_AUTO_START" => Some(Self::Auto),
