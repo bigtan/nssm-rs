@@ -10,11 +10,11 @@ pub struct Cli {
     pub command: Commands,
 
     /// Enable verbose output
-    #[arg(short, long, global = true)]
+    #[arg(short, long)]
     pub verbose: bool,
 
     /// Enable debug output
-    #[arg(short, long, global = true)]
+    #[arg(short, long)]
     pub debug: bool,
 }
 
@@ -92,4 +92,57 @@ pub enum Commands {
         /// Service name
         name: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands};
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn install_keeps_hyphenated_application_arguments() {
+        let cli = Cli::parse_from([
+            "nssm-rs",
+            "install",
+            "Clash",
+            r"D:\Tools\Clash\clash.exe",
+            "-d",
+            r"D:\Tools\Clash",
+        ]);
+
+        match cli.command {
+            Commands::Install {
+                service_name,
+                application,
+                arguments,
+            } => {
+                assert_eq!(service_name, "Clash");
+                assert_eq!(application, PathBuf::from(r"D:\Tools\Clash\clash.exe"));
+                assert_eq!(arguments, vec!["-d", r"D:\Tools\Clash"]);
+            }
+            _ => panic!("expected install command"),
+        }
+    }
+
+    #[test]
+    fn debug_option_still_works_before_subcommand() {
+        let cli = Cli::parse_from([
+            "nssm-rs",
+            "--debug",
+            "install",
+            "Clash",
+            r"D:\Tools\Clash\clash.exe",
+            "-d",
+            r"D:\Tools\Clash",
+        ]);
+
+        assert!(cli.debug);
+        match cli.command {
+            Commands::Install { arguments, .. } => {
+                assert_eq!(arguments, vec!["-d", r"D:\Tools\Clash"]);
+            }
+            _ => panic!("expected install command"),
+        }
+    }
 }
