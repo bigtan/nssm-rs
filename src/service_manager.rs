@@ -617,7 +617,7 @@ fn parameters_key_path(service_name: &str) -> String {
     format!("{SERVICES_ROOT}\\{service_name}\\{PARAMETERS_SUBKEY}")
 }
 
-fn single_value<'a>(parameter: ServiceParameter, values: &'a [String]) -> AppResult<&'a str> {
+fn single_value(parameter: ServiceParameter, values: &[String]) -> AppResult<&str> {
     match values {
         [value] => Ok(value),
         _ => Err(AppError::Message(format!(
