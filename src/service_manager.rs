@@ -17,15 +17,29 @@ use crate::registry::{RegistryKey, to_wide};
 const SERVICES_ROOT: &str = "SYSTEM\\CurrentControlSet\\Services";
 const PARAMETERS_SUBKEY: &str = "Parameters";
 
+/// Standard DELETE access right, needed for DeleteService.
+const DELETE_ACCESS: u32 = 0x0001_0000;
+
 pub struct ServiceManager {
     handle: SC_HANDLE,
 }
 
 impl ServiceManager {
+    /// Connects to the SCM with the minimal rights needed for everything
+    /// except service creation. Per-service rights are requested when the
+    /// individual service handle is opened.
     pub fn new() -> AppResult<Self> {
-        debug!("Creating new ServiceManager instance");
-        let handle =
-            unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ALL_ACCESS) }?;
+        Self::with_access(SC_MANAGER_CONNECT)
+    }
+
+    /// Connects with the additional right required by CreateServiceW.
+    pub fn new_for_install() -> AppResult<Self> {
+        Self::with_access(SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE)
+    }
+
+    fn with_access(access: u32) -> AppResult<Self> {
+        debug!("Creating new ServiceManager instance (access 0x{access:x})");
+        let handle = unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), access) }?;
         Ok(Self { handle })
     }
 
@@ -116,7 +130,7 @@ impl ServiceManager {
             }
         }
 
-        self.with_service_handle(service_name, SERVICE_ALL_ACCESS, |service_handle| unsafe {
+        self.with_service_handle(service_name, DELETE_ACCESS, |service_handle| unsafe {
             DeleteService(service_handle)?;
             Ok(())
         })?;
@@ -320,109 +334,21 @@ impl ServiceManager {
             let mut needed = 0u32;
             let _ = QueryServiceConfig2W(handle, SERVICE_CONFIG_DESCRIPTION, None, &mut needed);
             let mut buffer = vec![0u64; needed.div_ceil(8) as usize];
-            let bytes = std::slice::from_raw_parts_mut(
-                buffer.as_mut_ptr() as *mut u8,
-                needed as usize,
-            );
-            QueryServiceConfig2W(
-                handle,
-                SERVICE_CONFIG_DESCRIPTION,
-                Some(bytes),
-                &mut needed,
-            )?;
+            let bytes =
+                std::slice::from_raw_parts_mut(buffer.as_mut_ptr() as *mut u8, needed as usize);
+            QueryServiceConfig2W(handle, SERVICE_CONFIG_DESCRIPTION, Some(bytes), &mut needed)?;
             let info = &*(buffer.as_ptr() as *const SERVICE_DESCRIPTIONW);
             Ok(pwstr_to_string(info.lpDescription))
         })
     }
 
     fn save_service_config(&self, service_name: &str, config: &ServiceConfig) -> AppResult<()> {
-        let key = RegistryKey::create_local_machine(&parameters_key_path(service_name), KEY_WRITE)?;
-
-        key.set_string("Application", &config.application.to_string_lossy())?;
-        set_or_delete_path(&key, "AppDirectory", config.app_directory.as_ref())?;
-        set_or_delete_string(&key, "AppParameters", config.app_parameters.as_deref())?;
-        key.set_dword("AppPriority", config.app_priority.to_windows_value())?;
-        key.set_dword("AppNoConsole", u32::from(config.app_no_console))?;
-        key.set_dword("AppThrottle", config.app_throttle)?;
-        key.set_dword("AppStopMethodSkip", config.app_stop_method_skip)?;
-        key.set_dword("AppStopMethodConsole", config.app_stop_method_console)?;
-        key.set_dword("AppStopMethodWindow", config.app_stop_method_window)?;
-        key.set_dword("AppStopMethodThreads", config.app_stop_method_threads)?;
-        key.set_dword("AppRestartDelay", config.app_restart_delay)?;
-        key.set_string(
-            "AppExitDefault",
-            config.app_exit_default.as_registry_value(),
-        )?;
-        set_or_delete_path(&key, "AppStdout", config.app_stdout.as_ref())?;
-        set_or_delete_path(&key, "AppStderr", config.app_stderr.as_ref())?;
-        set_or_delete_path(&key, "AppStdin", config.app_stdin.as_ref())?;
-        if config.app_environment_extra.is_empty() {
-            key.delete_value("AppEnvironmentExtra")?;
-        } else {
-            key.set_multi_string("AppEnvironmentExtra", &config.app_environment_extra)?;
-        }
-
-        Ok(())
+        save_service_config(service_name, config)
     }
 
     fn load_service_config(&self, service_name: &str) -> AppResult<ServiceConfig> {
-        let key = RegistryKey::open_local_machine(&parameters_key_path(service_name), KEY_READ)?;
-        let mut config = ServiceConfig::default();
-
-        if let Some(value) = key.get_string("Application")? {
-            config.application = PathBuf::from(value);
-        }
-        if let Some(value) = key.get_string("AppDirectory")? {
-            config.app_directory = (!value.is_empty()).then(|| PathBuf::from(value));
-        }
-        if let Some(value) = key.get_string("AppParameters")? {
-            config.app_parameters = (!value.is_empty()).then_some(value);
-        }
-        if let Some(value) = key.get_dword("AppPriority")? {
-            config.app_priority = ProcessPriority::from_windows_value(value);
-        }
-        if let Some(value) = key.get_dword("AppNoConsole")? {
-            config.app_no_console = value != 0;
-        }
-        if let Some(value) = key.get_dword("AppThrottle")? {
-            config.app_throttle = value;
-        }
-        if let Some(value) = key.get_dword("AppStopMethodSkip")? {
-            config.app_stop_method_skip = value;
-        }
-        if let Some(value) = key.get_dword("AppStopMethodConsole")? {
-            config.app_stop_method_console = value;
-        }
-        if let Some(value) = key.get_dword("AppStopMethodWindow")? {
-            config.app_stop_method_window = value;
-        }
-        if let Some(value) = key.get_dword("AppStopMethodThreads")? {
-            config.app_stop_method_threads = value;
-        }
-        if let Some(value) = key.get_dword("AppRestartDelay")? {
-            config.app_restart_delay = value;
-        }
-        if let Some(value) = key.get_string("AppExitDefault")?
-            && let Some(exit_action) = crate::config::ExitAction::from_str(&value)
-        {
-            config.app_exit_default = exit_action;
-        }
-        if let Some(value) = key.get_string("AppStdout")? {
-            config.app_stdout = (!value.is_empty()).then(|| PathBuf::from(value));
-        }
-        if let Some(value) = key.get_string("AppStderr")? {
-            config.app_stderr = (!value.is_empty()).then(|| PathBuf::from(value));
-        }
-        if let Some(value) = key.get_string("AppStdin")? {
-            config.app_stdin = (!value.is_empty()).then(|| PathBuf::from(value));
-        }
-        if let Some(values) = key.get_multi_string("AppEnvironmentExtra")? {
-            config.app_environment_extra = values;
-        }
-
-        Ok(config)
+        load_service_config(service_name)
     }
-
     fn remove_service_config(&self, service_name: &str) -> AppResult<()> {
         match RegistryKey::delete_tree_local_machine(&parameters_key_path(service_name)) {
             Ok(()) => Ok(()),
@@ -432,11 +358,97 @@ impl ServiceManager {
             }
         }
     }
+}
 
-    pub fn load_service_config_for_run(&self, service_name: &str) -> AppResult<ServiceConfig> {
-        self.load_service_config(service_name)
+pub fn save_service_config(service_name: &str, config: &ServiceConfig) -> AppResult<()> {
+    let key = RegistryKey::create_local_machine(&parameters_key_path(service_name), KEY_WRITE)?;
+
+    key.set_string("Application", &config.application.to_string_lossy())?;
+    set_or_delete_path(&key, "AppDirectory", config.app_directory.as_ref())?;
+    set_or_delete_string(&key, "AppParameters", config.app_parameters.as_deref())?;
+    key.set_dword("AppPriority", config.app_priority.to_windows_value())?;
+    key.set_dword("AppNoConsole", u32::from(config.app_no_console))?;
+    key.set_dword("AppThrottle", config.app_throttle)?;
+    key.set_dword("AppStopMethodSkip", config.app_stop_method_skip)?;
+    key.set_dword("AppStopMethodConsole", config.app_stop_method_console)?;
+    key.set_dword("AppStopMethodWindow", config.app_stop_method_window)?;
+    key.set_dword("AppStopMethodThreads", config.app_stop_method_threads)?;
+    key.set_dword("AppRestartDelay", config.app_restart_delay)?;
+    key.set_string(
+        "AppExitDefault",
+        config.app_exit_default.as_registry_value(),
+    )?;
+    set_or_delete_path(&key, "AppStdout", config.app_stdout.as_ref())?;
+    set_or_delete_path(&key, "AppStderr", config.app_stderr.as_ref())?;
+    set_or_delete_path(&key, "AppStdin", config.app_stdin.as_ref())?;
+    if config.app_environment_extra.is_empty() {
+        key.delete_value("AppEnvironmentExtra")?;
+    } else {
+        key.set_multi_string("AppEnvironmentExtra", &config.app_environment_extra)?;
     }
 
+    Ok(())
+}
+
+pub fn load_service_config(service_name: &str) -> AppResult<ServiceConfig> {
+    let key = RegistryKey::open_local_machine(&parameters_key_path(service_name), KEY_READ)?;
+    let mut config = ServiceConfig::default();
+
+    if let Some(value) = key.get_string("Application")? {
+        config.application = PathBuf::from(value);
+    }
+    if let Some(value) = key.get_string("AppDirectory")? {
+        config.app_directory = (!value.is_empty()).then(|| PathBuf::from(value));
+    }
+    if let Some(value) = key.get_string("AppParameters")? {
+        config.app_parameters = (!value.is_empty()).then_some(value);
+    }
+    if let Some(value) = key.get_dword("AppPriority")? {
+        config.app_priority = ProcessPriority::from_windows_value(value);
+    }
+    if let Some(value) = key.get_dword("AppNoConsole")? {
+        config.app_no_console = value != 0;
+    }
+    if let Some(value) = key.get_dword("AppThrottle")? {
+        config.app_throttle = value;
+    }
+    if let Some(value) = key.get_dword("AppStopMethodSkip")? {
+        config.app_stop_method_skip = value;
+    }
+    if let Some(value) = key.get_dword("AppStopMethodConsole")? {
+        config.app_stop_method_console = value;
+    }
+    if let Some(value) = key.get_dword("AppStopMethodWindow")? {
+        config.app_stop_method_window = value;
+    }
+    if let Some(value) = key.get_dword("AppStopMethodThreads")? {
+        config.app_stop_method_threads = value;
+    }
+    if let Some(value) = key.get_dword("AppRestartDelay")? {
+        config.app_restart_delay = value;
+    }
+    if let Some(value) = key.get_string("AppExitDefault")?
+        && let Some(exit_action) = crate::config::ExitAction::from_str(&value)
+    {
+        config.app_exit_default = exit_action;
+    }
+    if let Some(value) = key.get_string("AppStdout")? {
+        config.app_stdout = (!value.is_empty()).then(|| PathBuf::from(value));
+    }
+    if let Some(value) = key.get_string("AppStderr")? {
+        config.app_stderr = (!value.is_empty()).then(|| PathBuf::from(value));
+    }
+    if let Some(value) = key.get_string("AppStdin")? {
+        config.app_stdin = (!value.is_empty()).then(|| PathBuf::from(value));
+    }
+    if let Some(values) = key.get_multi_string("AppEnvironmentExtra")? {
+        config.app_environment_extra = values;
+    }
+
+    Ok(config)
+}
+
+impl ServiceManager {
     pub fn query_service_status(&self, service_name: &str) -> AppResult<()> {
         self.with_service_handle(
             service_name,

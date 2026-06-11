@@ -136,7 +136,13 @@ mod tests {
 
     #[test]
     fn join_and_parse_round_trip() {
-        let original = vec!["C:\\Program Files\\app.exe", "--name", "hello world", "", "x\"y"];
+        let original = vec![
+            "C:\\Program Files\\app.exe",
+            "--name",
+            "hello world",
+            "",
+            "x\"y",
+        ];
         let joined = join_arguments(&original);
         assert_eq!(parse_command_line(&joined), original);
     }

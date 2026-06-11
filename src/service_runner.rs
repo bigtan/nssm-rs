@@ -30,7 +30,6 @@ use windows_service::{
 
 use crate::config::{ExitAction, ServiceConfig};
 use crate::error::{AppError, AppResult};
-use crate::service_manager::ServiceManager;
 
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 
@@ -100,7 +99,7 @@ fn service_main(arguments: Vec<OsString>) {
 fn run_service_main(service_name: String) -> AppResult<()> {
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let status_handle = register_service_handler(&service_name, shutdown_tx)?;
-    let config = ServiceManager::new()?.load_service_config_for_run(&service_name)?;
+    let config = crate::service_manager::load_service_config(&service_name)?;
 
     set_running_status(&status_handle)?;
     install_ctrlc_guard()?;
@@ -673,4 +672,3 @@ fn log_output_line(line: &str, is_stderr: bool) {
         info!("stdout: {line}");
     }
 }
-

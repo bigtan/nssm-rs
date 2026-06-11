@@ -165,8 +165,7 @@ impl RegistryKey {
 
     pub fn delete_value(&self, name: &str) -> AppResult<()> {
         let name_wide = to_wide(name);
-        let result =
-            unsafe { RegDeleteValueW(self.handle, PCWSTR::from_raw(name_wide.as_ptr())) };
+        let result = unsafe { RegDeleteValueW(self.handle, PCWSTR::from_raw(name_wide.as_ptr())) };
 
         if result != WIN32_ERROR(0) && result != ERROR_FILE_NOT_FOUND {
             return Err(AppError::Registry {

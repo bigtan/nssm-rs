@@ -52,7 +52,10 @@ fn run(cli: Cli) -> AppResult<()> {
     match cli.command {
         Commands::Run { name } => run_service(name),
         command => {
-            let service_manager = ServiceManager::new()?;
+            let service_manager = match command {
+                Commands::Install { .. } => ServiceManager::new_for_install()?,
+                _ => ServiceManager::new()?,
+            };
             execute_command(&service_manager, command)
         }
     }
