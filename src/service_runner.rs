@@ -38,7 +38,6 @@ define_windows_service!(ffi_service_main, service_main);
 enum ProcessStatus {
     Running,
     Exited(i32),
-    Terminated,
     Unknown(std::io::Error),
 }
 
@@ -98,58 +97,80 @@ fn service_main(arguments: Vec<OsString>) {
 fn run_service_main(service_name: String) -> AppResult<()> {
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let status_handle = register_service_handler(&service_name, shutdown_tx)?;
-    let config = crate::service_manager::load_service_config(&service_name)?;
 
-    set_running_status(&status_handle)?;
+    if let Err(error) = set_start_pending_status(&status_handle) {
+        warn!("Failed to report START_PENDING to the SCM: {error}");
+    }
+
+    // The SCM must always be told the service stopped, even when the loop
+    // bails out with an error, otherwise the service hangs in its last
+    // reported state.
+    let exit_code = match service_loop(&status_handle, &shutdown_rx, &service_name) {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            error!("Service '{service_name}' failed: {error}");
+            ServiceExitCode::ServiceSpecific(1)
+        }
+    };
+
+    set_stopped_status(&status_handle, exit_code)?;
+    Ok(())
+}
+
+fn service_loop(
+    status_handle: &ServiceStatusHandle,
+    shutdown_rx: &mpsc::Receiver<()>,
+    service_name: &str,
+) -> AppResult<ServiceExitCode> {
+    let config = crate::service_manager::load_service_config(service_name)?;
     install_ctrlc_guard()?;
 
     let mut restart_after: Option<Instant> = None;
     let mut consecutive_failures = 0u32;
-    let mut service_exit_code = ServiceExitCode::NO_ERROR;
+    let mut reported_running = false;
 
-    'outer: loop {
-        if wait_for_restart_delay(&shutdown_rx, restart_after)? {
-            break 'outer;
+    loop {
+        if wait_for_restart_delay(shutdown_rx, restart_after)? {
+            return Ok(ServiceExitCode::NO_ERROR);
         }
+
         let mut running_child = match launch_child(&config) {
             Ok(child) => child,
             Err(error) => {
                 error!("Failed to launch application: {error}");
-                service_exit_code = ServiceExitCode::ServiceSpecific(1);
-                break 'outer;
+                return Ok(ServiceExitCode::ServiceSpecific(1));
             }
         };
 
-        match monitor_child(
-            &status_handle,
-            &shutdown_rx,
+        // Only report RUNNING once the application has actually been
+        // launched; a broken configuration fails the start instead of
+        // flapping RUNNING -> STOPPED.
+        if !reported_running {
+            set_running_status(status_handle)?;
+            reported_running = true;
+        }
+
+        let control = monitor_child(
+            status_handle,
+            shutdown_rx,
             &config,
             &mut running_child.child,
             &mut consecutive_failures,
-        ) {
-            LoopControl::Restart(next_restart, exit_code) => {
-                service_exit_code = exit_code;
+        );
+        finalize_child_threads(running_child);
+
+        match control {
+            LoopControl::Restart(next_restart, _exit_code) => {
                 restart_after = next_restart;
             }
-            LoopControl::Exit(exit_code) => {
-                service_exit_code = exit_code;
-                finalize_child_threads(running_child);
-                break 'outer;
-            }
+            LoopControl::Exit(exit_code) => return Ok(exit_code),
             LoopControl::Idle(exit_code) => {
-                service_exit_code = exit_code;
-                finalize_child_threads(running_child);
                 info!("AppExitAction=Ignore: service stays running until stopped");
                 let _ = shutdown_rx.recv();
-                break 'outer;
+                return Ok(exit_code);
             }
         }
-
-        finalize_child_threads(running_child);
     }
-
-    set_stopped_status(&status_handle, service_exit_code)?;
-    Ok(())
 }
 
 fn register_service_handler(
@@ -173,6 +194,19 @@ fn register_service_handler(
         service_name,
         event_handler,
     )?)
+}
+
+fn set_start_pending_status(status_handle: &ServiceStatusHandle) -> AppResult<()> {
+    status_handle.set_service_status(ServiceStatus {
+        service_type: SERVICE_TYPE,
+        current_state: ServiceState::StartPending,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: ServiceExitCode::NO_ERROR,
+        checkpoint: 0,
+        wait_hint: Duration::from_secs(10),
+        process_id: None,
+    })?;
+    Ok(())
 }
 
 fn set_running_status(status_handle: &ServiceStatusHandle) -> AppResult<()> {
@@ -484,13 +518,6 @@ fn monitor_child(
                     ExitAction::Exit => LoopControl::Exit(service_exit_code),
                 };
             }
-            ProcessStatus::Terminated => {
-                info!("Application was terminated");
-                return LoopControl::Restart(
-                    Some(Instant::now() + Duration::from_millis(config.app_throttle as u64)),
-                    ServiceExitCode::ServiceSpecific(259),
-                );
-            }
             ProcessStatus::Unknown(error) => {
                 error!("Failed to query child process status: {error}");
                 report_stop_progress(status_handle, &mut 0, stop_wait_hint(config));
@@ -538,10 +565,9 @@ fn finalize_child_threads(running_child: RunningChild) {
 fn check_process_status(child: &mut Child) -> ProcessStatus {
     match child.try_wait() {
         Ok(None) => ProcessStatus::Running,
-        Ok(Some(status)) => match status.code() {
-            Some(code) => ProcessStatus::Exited(code),
-            None => ProcessStatus::Terminated,
-        },
+        // On Windows ExitStatus::code() is always Some; a process killed via
+        // TerminateProcess reports the exit code passed to that call.
+        Ok(Some(status)) => ProcessStatus::Exited(status.code().unwrap_or(1)),
         Err(error) => ProcessStatus::Unknown(error),
     }
 }
