@@ -47,6 +47,9 @@ enum ProcessStatus {
 enum LoopControl {
     Restart(Option<Instant>, ServiceExitCode),
     Exit(ServiceExitCode),
+    /// The application exited but the service keeps running without it
+    /// (AppExitAction=Ignore) until a stop is requested.
+    Idle(ServiceExitCode),
 }
 
 struct RunningChild {
@@ -135,6 +138,13 @@ fn run_service_main(service_name: String) -> AppResult<()> {
             LoopControl::Exit(exit_code) => {
                 service_exit_code = exit_code;
                 finalize_child_threads(running_child);
+                break 'outer;
+            }
+            LoopControl::Idle(exit_code) => {
+                service_exit_code = exit_code;
+                finalize_child_threads(running_child);
+                info!("AppExitAction=Ignore: service stays running until stopped");
+                let _ = shutdown_rx.recv();
                 break 'outer;
             }
         }
@@ -424,14 +434,14 @@ fn monitor_child(
                 info!("Application exited with code {exit_code} after {runtime:?}");
                 let service_exit_code = exit_code_to_service_code(exit_code);
 
-                if should_restart(&config.app_exit_default) {
-                    return Ok(LoopControl::Restart(
+                return Ok(match config.app_exit_default {
+                    ExitAction::Restart => LoopControl::Restart(
                         calculate_restart_delay(config, runtime, consecutive_failures),
                         service_exit_code,
-                    ));
-                }
-
-                return Ok(LoopControl::Exit(service_exit_code));
+                    ),
+                    ExitAction::Ignore => LoopControl::Idle(service_exit_code),
+                    ExitAction::Exit => LoopControl::Exit(service_exit_code),
+                });
             }
             ProcessStatus::Terminated => {
                 info!("Application was terminated");
@@ -493,10 +503,6 @@ fn check_process_status(child: &mut Child) -> ProcessStatus {
         },
         Err(error) => ProcessStatus::Unknown(error),
     }
-}
-
-fn should_restart(exit_action: &ExitAction) -> bool {
-    matches!(exit_action, ExitAction::Restart)
 }
 
 fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Arc<AtomicBool>) {
