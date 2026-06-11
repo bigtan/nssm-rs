@@ -3,8 +3,7 @@ use std::io::Write;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -104,7 +103,6 @@ fn run_service_main(service_name: String) -> AppResult<()> {
     set_running_status(&status_handle)?;
     install_ctrlc_guard()?;
 
-    let stop_ctrlc = Arc::new(AtomicBool::new(false));
     let mut restart_after: Option<Instant> = None;
     let mut consecutive_failures = 0u32;
     let mut service_exit_code = ServiceExitCode::NO_ERROR;
@@ -126,10 +124,9 @@ fn run_service_main(service_name: String) -> AppResult<()> {
             &status_handle,
             &shutdown_rx,
             &config,
-            &stop_ctrlc,
             &mut running_child.child,
             &mut consecutive_failures,
-        )? {
+        ) {
             LoopControl::Restart(next_restart, exit_code) => {
                 service_exit_code = exit_code;
                 restart_after = next_restart;
@@ -191,14 +188,18 @@ fn set_running_status(status_handle: &ServiceStatusHandle) -> AppResult<()> {
     Ok(())
 }
 
-fn set_stop_pending_status(status_handle: &ServiceStatusHandle) -> AppResult<()> {
+fn set_stop_pending_status(
+    status_handle: &ServiceStatusHandle,
+    checkpoint: u32,
+    wait_hint: Duration,
+) -> AppResult<()> {
     status_handle.set_service_status(ServiceStatus {
         service_type: SERVICE_TYPE,
         current_state: ServiceState::StopPending,
         controls_accepted: ServiceControlAccept::empty(),
         exit_code: ServiceExitCode::NO_ERROR,
-        checkpoint: 0,
-        wait_hint: Duration::from_millis(5000),
+        checkpoint,
+        wait_hint,
         process_id: None,
     })?;
     Ok(())
@@ -451,19 +452,18 @@ fn monitor_child(
     status_handle: &ServiceStatusHandle,
     shutdown_rx: &mpsc::Receiver<()>,
     config: &ServiceConfig,
-    stop_ctrlc: &Arc<AtomicBool>,
     child: &mut Child,
     consecutive_failures: &mut u32,
-) -> AppResult<LoopControl> {
+) -> LoopControl {
     let start_time = Instant::now();
 
     loop {
         match shutdown_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("Shutting down service");
-                set_stop_pending_status(status_handle)?;
-                stop_child_process(child, config, stop_ctrlc);
-                return Ok(LoopControl::Exit(ServiceExitCode::NO_ERROR));
+                report_stop_progress(status_handle, &mut 0, stop_wait_hint(config));
+                stop_child_process(status_handle, child, config);
+                return LoopControl::Exit(ServiceExitCode::NO_ERROR);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
@@ -475,27 +475,27 @@ fn monitor_child(
                 info!("Application exited with code {exit_code} after {runtime:?}");
                 let service_exit_code = exit_code_to_service_code(exit_code);
 
-                return Ok(match config.app_exit_default {
+                return match config.app_exit_default {
                     ExitAction::Restart => LoopControl::Restart(
                         calculate_restart_delay(config, runtime, consecutive_failures),
                         service_exit_code,
                     ),
                     ExitAction::Ignore => LoopControl::Idle(service_exit_code),
                     ExitAction::Exit => LoopControl::Exit(service_exit_code),
-                });
+                };
             }
             ProcessStatus::Terminated => {
                 info!("Application was terminated");
-                return Ok(LoopControl::Restart(
+                return LoopControl::Restart(
                     Some(Instant::now() + Duration::from_millis(config.app_throttle as u64)),
                     ServiceExitCode::ServiceSpecific(259),
-                ));
+                );
             }
             ProcessStatus::Unknown(error) => {
                 error!("Failed to query child process status: {error}");
-                set_stop_pending_status(status_handle)?;
-                stop_child_process(child, config, stop_ctrlc);
-                return Ok(LoopControl::Exit(ServiceExitCode::ServiceSpecific(1)));
+                report_stop_progress(status_handle, &mut 0, stop_wait_hint(config));
+                stop_child_process(status_handle, child, config);
+                return LoopControl::Exit(ServiceExitCode::ServiceSpecific(1));
             }
         }
     }
@@ -546,63 +546,135 @@ fn check_process_status(child: &mut Child) -> ProcessStatus {
     }
 }
 
-fn stop_child_process(child: &mut Child, config: &ServiceConfig, stop_ctrlc: &Arc<AtomicBool>) {
-    info!("Stopping child process with PID: {}", child.id());
-    stop_ctrlc.store(true, Ordering::SeqCst);
+/// Grace period after TerminateProcess before giving up waiting.
+const KILL_WAIT_MS: u32 = 5000;
 
-    let child_id = child.id();
-
+/// Total stop budget reported to the SCM, covering every enabled stop
+/// method plus the kill grace period.
+fn stop_wait_hint(config: &ServiceConfig) -> Duration {
+    let mut total_ms = u64::from(KILL_WAIT_MS) + 2000;
     if !config.app_no_console && (config.app_stop_method_skip & 1) == 0 {
-        try_console_ctrl_c(child, child_id, config.app_stop_method_console, stop_ctrlc);
+        total_ms += u64::from(config.app_stop_method_console);
     }
     if (config.app_stop_method_skip & 2) == 0 {
-        try_close_windows(child, child_id, config.app_stop_method_window, stop_ctrlc);
+        total_ms += u64::from(config.app_stop_method_window);
     }
     if (config.app_stop_method_skip & 4) == 0 {
-        try_terminate_process(child, child_id, config.app_stop_method_threads, stop_ctrlc);
+        total_ms += u64::from(config.app_stop_method_threads);
     }
-    if (config.app_stop_method_skip & 8) == 0
-        && let Err(error) = child.kill()
-    {
-        warn!("Failed to kill child process: {error}");
-    }
-
-    let _ = child.wait();
-    stop_ctrlc.store(false, Ordering::SeqCst);
+    Duration::from_millis(total_ms)
 }
 
-fn try_console_ctrl_c(
-    child: &mut Child,
-    child_id: u32,
-    timeout_ms: u32,
-    stop_ctrlc: &Arc<AtomicBool>,
+fn report_stop_progress(
+    status_handle: &ServiceStatusHandle,
+    checkpoint: &mut u32,
+    wait_hint: Duration,
 ) {
-    info!("Sending Ctrl-C to child process");
-    unsafe {
-        use windows::Win32::System::Console::{
-            AttachConsole, FreeConsole, GenerateConsoleCtrlEvent,
-        };
+    if let Err(error) = set_stop_pending_status(status_handle, *checkpoint, wait_hint) {
+        warn!("Failed to report stop progress to the SCM: {error}");
+    }
+    *checkpoint += 1;
+}
 
-        if AttachConsole(child_id).is_ok() {
-            let _ = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-            let _ = FreeConsole();
-        } else if GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0).is_err() {
-            warn!("Failed to send Ctrl-C event");
+fn process_running(child: &mut Child) -> bool {
+    matches!(check_process_status(child), ProcessStatus::Running)
+}
+
+/// Escalating stop sequence: Ctrl-C, WM_CLOSE, WM_QUIT, TerminateProcess.
+///
+/// Each step is skipped if the corresponding AppStopMethodSkip bit is set
+/// or the process has already exited. All signalling is done while the
+/// child handle is held, so the PID cannot be recycled by another process
+/// mid-sequence.
+fn stop_child_process(
+    status_handle: &ServiceStatusHandle,
+    child: &mut Child,
+    config: &ServiceConfig,
+) {
+    let child_id = child.id();
+    info!("Stopping child process with PID: {child_id}");
+    let wait_hint = stop_wait_hint(config);
+    let mut checkpoint = 1u32;
+
+    if !process_running(child) {
+        info!("Child process already exited");
+        return;
+    }
+
+    if !config.app_no_console && (config.app_stop_method_skip & 1) == 0 {
+        report_stop_progress(status_handle, &mut checkpoint, wait_hint);
+        send_console_ctrl_c(child_id);
+        if wait_for_process_exit(child, config.app_stop_method_console) {
+            info!("Child process stopped after Ctrl-C");
+            return;
         }
     }
 
-    if wait_for_process_exit(child, timeout_ms) {
-        info!("Child process stopped after Ctrl-C");
-        stop_ctrlc.store(false, Ordering::SeqCst);
+    if (config.app_stop_method_skip & 2) == 0 && process_running(child) {
+        report_stop_progress(status_handle, &mut checkpoint, wait_hint);
+        post_close_to_windows(child_id);
+        if wait_for_process_exit(child, config.app_stop_method_window) {
+            info!("Child process stopped after WM_CLOSE");
+            return;
+        }
+    }
+
+    if (config.app_stop_method_skip & 4) == 0 && process_running(child) {
+        report_stop_progress(status_handle, &mut checkpoint, wait_hint);
+        post_quit_to_threads(child_id);
+        if wait_for_process_exit(child, config.app_stop_method_threads) {
+            info!("Child process stopped after WM_QUIT");
+            return;
+        }
+    }
+
+    if (config.app_stop_method_skip & 8) == 0 && process_running(child) {
+        report_stop_progress(status_handle, &mut checkpoint, wait_hint);
+        info!("Terminating child process");
+        if let Err(error) = child.kill() {
+            warn!("Failed to kill child process: {error}");
+        }
+        if wait_for_process_exit(child, KILL_WAIT_MS) {
+            info!("Child process terminated");
+            return;
+        }
+    }
+
+    if process_running(child) {
+        warn!(
+            "Child process {child_id} is still running after the stop sequence; \
+             the job object will terminate it when the service exits"
+        );
     }
 }
 
-fn try_close_windows(
-    child: &mut Child,
-    child_id: u32,
-    timeout_ms: u32,
-    stop_ctrlc: &Arc<AtomicBool>,
-) {
+fn send_console_ctrl_c(child_id: u32) {
+    info!("Sending Ctrl-C to child process");
+    unsafe {
+        use windows::Win32::System::Console::{
+            AllocConsole, AttachConsole, FreeConsole, GenerateConsoleCtrlEvent,
+        };
+
+        // A process can only be attached to one console at a time and the
+        // service allocates its own at startup, so detach first. If the
+        // child shares our console this re-attaches to the same one.
+        let _ = FreeConsole();
+        if AttachConsole(child_id).is_ok() {
+            // Process group 0 signals every process attached to the console;
+            // our own empty ctrl-c handler ignores it for this process.
+            if GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0).is_err() {
+                warn!("Failed to send Ctrl-C event");
+            }
+            let _ = FreeConsole();
+        } else {
+            warn!("Failed to attach to child process console; skipping Ctrl-C");
+        }
+        // Restore a console for subsequent children and stop attempts.
+        let _ = AllocConsole();
+    }
+}
+
+fn post_close_to_windows(child_id: u32) {
     info!("Sending WM_CLOSE to child process windows");
     unsafe {
         use windows::Win32::Foundation::{HWND, LPARAM, TRUE};
@@ -630,32 +702,41 @@ fn try_close_windows(
 
         let _ = EnumWindows(Some(enum_window_proc), LPARAM(child_id as isize));
     }
-
-    if wait_for_process_exit(child, timeout_ms) {
-        info!("Child process stopped after WM_CLOSE");
-        stop_ctrlc.store(false, Ordering::SeqCst);
-    }
 }
 
-fn try_terminate_process(
-    child: &mut Child,
-    child_id: u32,
-    timeout_ms: u32,
-    stop_ctrlc: &Arc<AtomicBool>,
-) {
-    info!("Terminating child process");
+fn post_quit_to_threads(child_id: u32) {
+    info!("Posting WM_QUIT to child process threads");
     unsafe {
-        use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
 
-        if let Ok(process_handle) = OpenProcess(PROCESS_TERMINATE, false, child_id) {
-            let _ = TerminateProcess(process_handle, 1);
-            let _ = windows::Win32::Foundation::CloseHandle(process_handle);
+        let snapshot = match CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                warn!("Failed to snapshot threads for WM_QUIT: {error}");
+                return;
+            }
+        };
+
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        if Thread32First(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32OwnerProcessID == child_id {
+                    let _ = PostThreadMessageW(entry.th32ThreadID, WM_QUIT, WPARAM(0), LPARAM(0));
+                }
+                entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+                if Thread32Next(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
         }
-    }
-
-    if wait_for_process_exit(child, timeout_ms) {
-        info!("Child process stopped after terminate");
-        stop_ctrlc.store(false, Ordering::SeqCst);
+        let _ = CloseHandle(snapshot);
     }
 }
 
