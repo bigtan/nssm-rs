@@ -27,7 +27,7 @@ pub enum Commands {
         /// Application path
         application: PathBuf,
         /// Application arguments
-        #[arg(trailing_var_arg = true)]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<String>,
     },
     /// Remove a service
