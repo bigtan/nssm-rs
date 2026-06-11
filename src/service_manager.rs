@@ -3,6 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use log::{debug, info, warn};
+use windows::Win32::Foundation::{ERROR_SERVICE_NOT_ACTIVE, ERROR_SERVICE_SPECIFIC_ERROR};
 use windows::Win32::System::Registry::{KEY_READ, KEY_WRITE};
 use windows::Win32::System::Services::*;
 use windows::core::PCWSTR;
@@ -19,6 +20,45 @@ const PARAMETERS_SUBKEY: &str = "Parameters";
 
 /// Standard DELETE access right, needed for DeleteService.
 const DELETE_ACCESS: u32 = 0x0001_0000;
+
+const START_TIMEOUT: Duration = Duration::from_secs(30);
+const STOP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Polls the service status until it reaches `target`, the service stops
+/// unexpectedly while waiting for SERVICE_RUNNING, or the timeout expires.
+fn wait_for_service_state(
+    service_handle: SC_HANDLE,
+    target: SERVICE_STATUS_CURRENT_STATE,
+    timeout: Duration,
+) -> AppResult<()> {
+    let start = std::time::Instant::now();
+    loop {
+        let mut status = SERVICE_STATUS::default();
+        unsafe { QueryServiceStatus(service_handle, &mut status) }?;
+
+        if status.dwCurrentState == target {
+            return Ok(());
+        }
+        if target == SERVICE_RUNNING && status.dwCurrentState == SERVICE_STOPPED {
+            let exit_code = if status.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR.0 {
+                status.dwServiceSpecificExitCode
+            } else {
+                status.dwWin32ExitCode
+            };
+            return Err(AppError::Message(format!(
+                "Service stopped during startup (exit code {exit_code})"
+            )));
+        }
+        if start.elapsed() >= timeout {
+            return Err(AppError::Message(format!(
+                "Timed out waiting for service state {} (current state {})",
+                target.0, status.dwCurrentState.0
+            )));
+        }
+
+        thread::sleep(Duration::from_millis(250));
+    }
+}
 
 pub struct ServiceManager {
     handle: SC_HANDLE,
@@ -130,6 +170,10 @@ impl ServiceManager {
             }
         }
 
+        if let Err(error) = self.stop_service(service_name) {
+            warn!("Could not stop service before removal: {error}");
+        }
+
         self.with_service_handle(service_name, DELETE_ACCESS, |service_handle| unsafe {
             DeleteService(service_handle)?;
             Ok(())
@@ -141,29 +185,47 @@ impl ServiceManager {
     }
 
     pub fn start_service(&self, service_name: &str) -> AppResult<()> {
-        self.with_service_handle(service_name, SERVICE_START, |service_handle| unsafe {
-            StartServiceW(service_handle, None)?;
-            Ok(())
-        })?;
+        self.with_service_handle(
+            service_name,
+            SERVICE_START | SERVICE_QUERY_STATUS,
+            |service_handle| {
+                unsafe { StartServiceW(service_handle, None) }?;
+                wait_for_service_state(service_handle, SERVICE_RUNNING, START_TIMEOUT)
+            },
+        )?;
 
         info!("Service '{service_name}' started successfully");
         Ok(())
     }
 
     pub fn stop_service(&self, service_name: &str) -> AppResult<()> {
-        self.with_service_handle(service_name, SERVICE_STOP, |service_handle| unsafe {
-            let mut status = SERVICE_STATUS::default();
-            ControlService(service_handle, SERVICE_CONTROL_STOP, &mut status)?;
-            Ok(())
-        })?;
+        let was_running = self.with_service_handle(
+            service_name,
+            SERVICE_STOP | SERVICE_QUERY_STATUS,
+            |service_handle| {
+                let mut status = SERVICE_STATUS::default();
+                match unsafe { ControlService(service_handle, SERVICE_CONTROL_STOP, &mut status) } {
+                    Ok(()) => {}
+                    Err(error) if error.code() == ERROR_SERVICE_NOT_ACTIVE.to_hresult() => {
+                        return Ok(false);
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+                wait_for_service_state(service_handle, SERVICE_STOPPED, STOP_TIMEOUT)?;
+                Ok(true)
+            },
+        )?;
 
-        info!("Service '{service_name}' stopped successfully");
+        if was_running {
+            info!("Service '{service_name}' stopped successfully");
+        } else {
+            info!("Service '{service_name}' is not running");
+        }
         Ok(())
     }
 
     pub fn restart_service(&self, service_name: &str) -> AppResult<()> {
         self.stop_service(service_name)?;
-        thread::sleep(Duration::from_secs(2));
         self.start_service(service_name)
     }
 
