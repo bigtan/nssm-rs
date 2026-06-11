@@ -533,16 +533,26 @@ fn calculate_restart_delay(
     runtime: Duration,
     consecutive_failures: &mut u32,
 ) -> Option<Instant> {
-    let delay = if runtime.as_millis() < config.app_throttle as u128 {
+    let delay = restart_delay_duration(config, runtime, consecutive_failures);
+    (delay.as_millis() > 0).then(|| Instant::now() + delay)
+}
+
+/// Exponential backoff for rapidly failing applications: runtimes below
+/// AppThrottle count as failures and back off 2^n seconds (capped at
+/// 256s); a healthy runtime resets the counter and uses AppRestartDelay.
+fn restart_delay_duration(
+    config: &ServiceConfig,
+    runtime: Duration,
+    consecutive_failures: &mut u32,
+) -> Duration {
+    if runtime.as_millis() < config.app_throttle as u128 {
         *consecutive_failures += 1;
         let millis = (2u64.pow((*consecutive_failures).min(8))) * 1000;
         Duration::from_millis(millis.min(256000))
     } else {
         *consecutive_failures = 0;
         Duration::from_millis(config.app_restart_delay as u64)
-    };
-
-    (delay.as_millis() > 0).then(|| Instant::now() + delay)
+    }
 }
 
 fn exit_code_to_service_code(exit_code: i32) -> ServiceExitCode {
@@ -775,4 +785,66 @@ fn wait_for_process_exit(child: &mut Child, timeout_ms: u32) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> ServiceConfig {
+        ServiceConfig {
+            app_throttle: 1500,
+            app_restart_delay: 0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fast_failures_back_off_exponentially() {
+        let config = test_config();
+        let mut failures = 0;
+        let fast_exit = Duration::from_millis(100);
+
+        assert_eq!(
+            restart_delay_duration(&config, fast_exit, &mut failures),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            restart_delay_duration(&config, fast_exit, &mut failures),
+            Duration::from_secs(4)
+        );
+        assert_eq!(
+            restart_delay_duration(&config, fast_exit, &mut failures),
+            Duration::from_secs(8)
+        );
+        assert_eq!(failures, 3);
+    }
+
+    #[test]
+    fn backoff_is_capped_at_256_seconds() {
+        let config = test_config();
+        let mut failures = 20;
+        assert_eq!(
+            restart_delay_duration(&config, Duration::from_millis(1), &mut failures),
+            Duration::from_secs(256)
+        );
+    }
+
+    #[test]
+    fn healthy_runtime_resets_failure_counter() {
+        let mut config = test_config();
+        config.app_restart_delay = 500;
+        let mut failures = 5;
+
+        let delay = restart_delay_duration(&config, Duration::from_secs(60), &mut failures);
+        assert_eq!(delay, Duration::from_millis(500));
+        assert_eq!(failures, 0);
+    }
+
+    #[test]
+    fn zero_restart_delay_means_immediate_restart() {
+        let config = test_config();
+        let mut failures = 0;
+        assert!(calculate_restart_delay(&config, Duration::from_secs(60), &mut failures).is_none());
+    }
 }

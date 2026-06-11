@@ -255,3 +255,103 @@ fn empty_to_none_path(value: &str) -> Option<PathBuf> {
 fn bool_to_flag(value: bool) -> String {
     if value { "1" } else { "0" }.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_is_case_insensitive() {
+        assert_eq!(
+            ServiceParameter::parse("application").unwrap(),
+            ServiceParameter::Application
+        );
+        assert_eq!(
+            ServiceParameter::parse("AppExitAction").unwrap(),
+            ServiceParameter::AppExitAction
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unknown_parameter() {
+        assert!(matches!(
+            ServiceParameter::parse("NoSuchParameter"),
+            Err(AppError::UnknownParameter(_))
+        ));
+    }
+
+    #[test]
+    fn apply_then_read_round_trips() {
+        let mut config = ServiceConfig::default();
+
+        for (parameter, value) in [
+            (ServiceParameter::Application, r"C:\app.exe"),
+            (ServiceParameter::AppParameters, "--port 80"),
+            (ServiceParameter::AppThrottle, "3000"),
+            (ServiceParameter::AppExitAction, "Ignore"),
+            (ServiceParameter::AppNoConsole, "1"),
+            (ServiceParameter::AppStdout, r"C:\logs\out.log"),
+        ] {
+            parameter.apply(&mut config, value).unwrap();
+            assert_eq!(parameter.read(&config), value, "{}", parameter.as_str());
+        }
+    }
+
+    #[test]
+    fn apply_rejects_empty_application() {
+        let mut config = ServiceConfig::default();
+        assert!(matches!(
+            ServiceParameter::Application.apply(&mut config, ""),
+            Err(AppError::InvalidParameterValue { .. })
+        ));
+    }
+
+    #[test]
+    fn apply_rejects_invalid_values() {
+        let mut config = ServiceConfig::default();
+        assert!(
+            ServiceParameter::Start
+                .apply(&mut config, "SOMETIMES")
+                .is_err()
+        );
+        assert!(
+            ServiceParameter::AppThrottle
+                .apply(&mut config, "abc")
+                .is_err()
+        );
+        assert!(
+            ServiceParameter::AppExitAction
+                .apply(&mut config, "Reboot")
+                .is_err()
+        );
+        assert!(
+            ServiceParameter::AppPriority
+                .apply(&mut config, "TURBO")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn environment_extra_round_trips_through_lines() {
+        let mut config = ServiceConfig::default();
+        ServiceParameter::AppEnvironmentExtra
+            .apply(&mut config, "A=1\nB=two words")
+            .unwrap();
+        assert_eq!(config.app_environment_extra, vec!["A=1", "B=two words"]);
+        assert_eq!(
+            ServiceParameter::AppEnvironmentExtra.read(&config),
+            "A=1\nB=two words"
+        );
+    }
+
+    #[test]
+    fn start_default_matches_install_default() {
+        use crate::config::ServiceStartType;
+
+        let default = ServiceParameter::Start.default_value();
+        assert_eq!(
+            ServiceStartType::from_str(&default),
+            Some(ServiceStartType::Auto)
+        );
+    }
+}
