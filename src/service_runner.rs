@@ -310,7 +310,7 @@ fn build_command(config: &ServiceConfig) -> Command {
     command.current_dir(resolve_working_dir(config));
 
     if let Some(parameters) = &config.app_parameters {
-        command.args(parse_command_line(parameters));
+        command.args(crate::cmdline::parse_command_line(parameters));
     }
 
     configure_stdio(&mut command, config);
@@ -656,26 +656,3 @@ fn log_output_line(line: &str, is_stderr: bool) {
     }
 }
 
-fn parse_command_line(input: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current_arg = String::new();
-    let mut in_quotes = false;
-
-    for ch in input.chars() {
-        match ch {
-            '"' => in_quotes = !in_quotes,
-            ' ' | '\t' if !in_quotes => {
-                if !current_arg.is_empty() {
-                    args.push(std::mem::take(&mut current_arg));
-                }
-            }
-            _ => current_arg.push(ch),
-        }
-    }
-
-    if !current_arg.is_empty() {
-        args.push(current_arg);
-    }
-
-    args
-}

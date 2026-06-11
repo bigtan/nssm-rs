@@ -35,15 +35,24 @@ impl ServiceManager {
     ) -> AppResult<()> {
         info!("Creating service configuration for '{service_name}'");
 
+        let application = std::path::absolute(application)?;
+        if !application.is_file() {
+            warn!(
+                "Application '{}' does not exist (yet); the service will fail to start until it does",
+                application.display()
+            );
+        }
+
         let config = ServiceConfig {
-            application: application.to_path_buf(),
             app_directory: Some(
                 application
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf(),
             ),
-            app_parameters: (!arguments.is_empty()).then(|| arguments.join(" ")),
+            app_parameters: (!arguments.is_empty())
+                .then(|| crate::cmdline::join_arguments(arguments)),
+            application,
             ..Default::default()
         };
 
@@ -52,7 +61,11 @@ impl ServiceManager {
 
     pub fn create_service(&self, service_name: &str, config: &ServiceConfig) -> AppResult<()> {
         let nssm_path = std::env::current_exe()?;
-        let service_command = format!("\"{}\" run {}", nssm_path.to_string_lossy(), service_name);
+        let service_command = format!(
+            "\"{}\" run {}",
+            nssm_path.to_string_lossy(),
+            crate::cmdline::quote_argument(service_name)
+        );
 
         let service_name_wide = to_wide(service_name);
         let display_name = config.display_name.as_deref().unwrap_or(service_name);

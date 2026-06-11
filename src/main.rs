@@ -1,4 +1,5 @@
 mod cli;
+mod cmdline;
 mod config;
 mod error;
 mod parameters;
