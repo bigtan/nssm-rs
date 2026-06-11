@@ -157,11 +157,12 @@ impl ServiceManager {
         &self,
         service_name: &str,
         parameter: &str,
-        value: &str,
+        values: &[String],
     ) -> AppResult<()> {
         let parameter = ServiceParameter::parse(parameter)?;
         match parameter {
             ServiceParameter::Start => {
+                let value = single_value(parameter, values)?;
                 let start_type = ServiceStartType::from_str(value).ok_or_else(|| {
                     AppError::InvalidParameterValue {
                         parameter: parameter.as_str().to_string(),
@@ -170,9 +171,38 @@ impl ServiceManager {
                 })?;
                 self.set_scm_start_type(service_name, start_type)?;
             }
-            ServiceParameter::DisplayName => self.set_scm_display_name(service_name, value)?,
-            ServiceParameter::Description => self.set_scm_description(service_name, value)?,
+            ServiceParameter::DisplayName => {
+                self.set_scm_display_name(service_name, single_value(parameter, values)?)?;
+            }
+            ServiceParameter::Description => {
+                self.set_scm_description(service_name, single_value(parameter, values)?)?;
+            }
+            ServiceParameter::AppEnvironmentExtra => {
+                // A single empty value clears the list.
+                let entries: Vec<String> = match values {
+                    [value] if value.is_empty() => Vec::new(),
+                    _ => values.to_vec(),
+                };
+                for entry in &entries {
+                    if !entry.contains('=') {
+                        return Err(AppError::InvalidParameterValue {
+                            parameter: parameter.as_str().to_string(),
+                            value: entry.clone(),
+                        });
+                    }
+                }
+                let mut config = self.load_service_config(service_name)?;
+                config.app_environment_extra = entries;
+                self.save_service_config(service_name, &config)?;
+            }
+            ServiceParameter::AppParameters if values.len() > 1 => {
+                let joined = crate::cmdline::join_arguments(values);
+                let mut config = self.load_service_config(service_name)?;
+                parameter.apply(&mut config, &joined)?;
+                self.save_service_config(service_name, &config)?;
+            }
             _ => {
+                let value = single_value(parameter, values)?;
                 let mut config = self.load_service_config(service_name)?;
                 parameter.apply(&mut config, value)?;
                 self.save_service_config(service_name, &config)?;
@@ -182,7 +212,7 @@ impl ServiceManager {
         info!(
             "Parameter '{}' set to '{}' for service '{}'",
             parameter.as_str(),
-            value,
+            values.join(" "),
             service_name
         );
         Ok(())
@@ -309,8 +339,8 @@ impl ServiceManager {
         let key = RegistryKey::create_local_machine(&parameters_key_path(service_name), KEY_WRITE)?;
 
         key.set_string("Application", &config.application.to_string_lossy())?;
-        set_optional_string(&key, "AppDirectory", config.app_directory.as_ref())?;
-        set_optional_string_value(&key, "AppParameters", config.app_parameters.as_deref())?;
+        set_or_delete_path(&key, "AppDirectory", config.app_directory.as_ref())?;
+        set_or_delete_string(&key, "AppParameters", config.app_parameters.as_deref())?;
         key.set_dword("AppPriority", config.app_priority.to_windows_value())?;
         key.set_dword("AppNoConsole", u32::from(config.app_no_console))?;
         key.set_dword("AppThrottle", config.app_throttle)?;
@@ -323,9 +353,14 @@ impl ServiceManager {
             "AppExitDefault",
             config.app_exit_default.as_registry_value(),
         )?;
-        set_optional_string(&key, "AppStdout", config.app_stdout.as_ref())?;
-        set_optional_string(&key, "AppStderr", config.app_stderr.as_ref())?;
-        set_optional_string(&key, "AppStdin", config.app_stdin.as_ref())?;
+        set_or_delete_path(&key, "AppStdout", config.app_stdout.as_ref())?;
+        set_or_delete_path(&key, "AppStderr", config.app_stderr.as_ref())?;
+        set_or_delete_path(&key, "AppStdin", config.app_stdin.as_ref())?;
+        if config.app_environment_extra.is_empty() {
+            key.delete_value("AppEnvironmentExtra")?;
+        } else {
+            key.set_multi_string("AppEnvironmentExtra", &config.app_environment_extra)?;
+        }
 
         Ok(())
     }
@@ -380,6 +415,9 @@ impl ServiceManager {
         }
         if let Some(value) = key.get_string("AppStdin")? {
             config.app_stdin = (!value.is_empty()).then(|| PathBuf::from(value));
+        }
+        if let Some(values) = key.get_multi_string("AppEnvironmentExtra")? {
+            config.app_environment_extra = values;
         }
 
         Ok(config)
@@ -505,17 +543,27 @@ fn parameters_key_path(service_name: &str) -> String {
     format!("{SERVICES_ROOT}\\{service_name}\\{PARAMETERS_SUBKEY}")
 }
 
-fn set_optional_string(key: &RegistryKey, name: &str, value: Option<&PathBuf>) -> AppResult<()> {
-    if let Some(path) = value {
-        let path_value = path.to_string_lossy().into_owned();
-        key.set_string(name, &path_value)?;
+fn single_value<'a>(parameter: ServiceParameter, values: &'a [String]) -> AppResult<&'a str> {
+    match values {
+        [value] => Ok(value),
+        _ => Err(AppError::Message(format!(
+            "Parameter '{}' expects exactly one value, got {}",
+            parameter.as_str(),
+            values.len()
+        ))),
     }
-    Ok(())
 }
 
-fn set_optional_string_value(key: &RegistryKey, name: &str, value: Option<&str>) -> AppResult<()> {
-    if let Some(value) = value {
-        key.set_string(name, value)?;
+fn set_or_delete_path(key: &RegistryKey, name: &str, value: Option<&PathBuf>) -> AppResult<()> {
+    match value {
+        Some(path) => key.set_string(name, &path.to_string_lossy()),
+        None => key.delete_value(name),
     }
-    Ok(())
+}
+
+fn set_or_delete_string(key: &RegistryKey, name: &str, value: Option<&str>) -> AppResult<()> {
+    match value {
+        Some(value) => key.set_string(name, value),
+        None => key.delete_value(name),
+    }
 }

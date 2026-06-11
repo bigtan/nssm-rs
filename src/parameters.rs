@@ -23,6 +23,7 @@ pub enum ServiceParameter {
     AppStopMethodThreads,
     AppRestartDelay,
     AppExitAction,
+    AppEnvironmentExtra,
 }
 
 impl ServiceParameter {
@@ -46,6 +47,7 @@ impl ServiceParameter {
             "APPSTOPMETHOD_THREADS" => Ok(Self::AppStopMethodThreads),
             "APPRESTARTDELAY" => Ok(Self::AppRestartDelay),
             "APPEXITACTION" => Ok(Self::AppExitAction),
+            "APPENVIRONMENTEXTRA" => Ok(Self::AppEnvironmentExtra),
             _ => Err(AppError::UnknownParameter(parameter.to_string())),
         }
     }
@@ -59,7 +61,8 @@ impl ServiceParameter {
             | Self::Description
             | Self::AppStdout
             | Self::AppStderr
-            | Self::AppStdin => String::new(),
+            | Self::AppStdin
+            | Self::AppEnvironmentExtra => String::new(),
             Self::Start => "SERVICE_AUTO_START".to_string(),
             Self::AppPriority => "NORMAL_PRIORITY_CLASS".to_string(),
             Self::AppNoConsole => "0".to_string(),
@@ -149,6 +152,13 @@ impl ServiceParameter {
                         value: value.to_string(),
                     })?;
             }
+            Self::AppEnvironmentExtra => {
+                config.app_environment_extra = value
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect();
+            }
         }
 
         Ok(())
@@ -190,6 +200,7 @@ impl ServiceParameter {
             Self::AppStopMethodThreads => config.app_stop_method_threads.to_string(),
             Self::AppRestartDelay => config.app_restart_delay.to_string(),
             Self::AppExitAction => config.app_exit_default.as_registry_value().to_string(),
+            Self::AppEnvironmentExtra => config.app_environment_extra.join("\n"),
         }
     }
 
@@ -213,6 +224,7 @@ impl ServiceParameter {
             Self::AppStopMethodThreads => "APPSTOPMETHOD_THREADS",
             Self::AppRestartDelay => "APPRESTARTDELAY",
             Self::AppExitAction => "APPEXITACTION",
+            Self::AppEnvironmentExtra => "APPENVIRONMENTEXTRA",
         }
     }
 }

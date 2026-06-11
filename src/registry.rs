@@ -136,7 +136,74 @@ impl RegistryKey {
         Ok(())
     }
 
+    pub fn set_multi_string(&self, name: &str, values: &[String]) -> AppResult<()> {
+        let name_wide = to_wide(name);
+        let value_wide = encode_multi_sz(values);
+        let bytes = unsafe {
+            std::slice::from_raw_parts(value_wide.as_ptr() as *const u8, value_wide.len() * 2)
+        };
+        let result = unsafe {
+            RegSetValueExW(
+                self.handle,
+                PCWSTR::from_raw(name_wide.as_ptr()),
+                Some(0),
+                REG_MULTI_SZ,
+                Some(bytes),
+            )
+        };
+
+        if result != WIN32_ERROR(0) {
+            return Err(AppError::Registry {
+                operation: "set multi string",
+                path: format!("{}\\{}", self.path, name),
+                code: result.0,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn delete_value(&self, name: &str) -> AppResult<()> {
+        let name_wide = to_wide(name);
+        let result =
+            unsafe { RegDeleteValueW(self.handle, PCWSTR::from_raw(name_wide.as_ptr())) };
+
+        if result != WIN32_ERROR(0) && result != ERROR_FILE_NOT_FOUND {
+            return Err(AppError::Registry {
+                operation: "delete value",
+                path: format!("{}\\{}", self.path, name),
+                code: result.0,
+            });
+        }
+
+        Ok(())
+    }
+
     pub fn get_string(&self, name: &str) -> AppResult<Option<String>> {
+        let Some(buffer) = self.get_raw_value(name, "get string")? else {
+            return Ok(None);
+        };
+
+        let wide_len = buffer.len() / 2;
+        let wide = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u16, wide_len) };
+        let mut text = String::from_utf16_lossy(wide);
+        while text.ends_with('\0') {
+            text.pop();
+        }
+        Ok(Some(text))
+    }
+
+    pub fn get_multi_string(&self, name: &str) -> AppResult<Option<Vec<String>>> {
+        let Some(buffer) = self.get_raw_value(name, "get multi string")? else {
+            return Ok(None);
+        };
+
+        let wide_len = buffer.len() / 2;
+        let wide = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u16, wide_len) };
+        Ok(Some(decode_multi_sz(wide)))
+    }
+
+    fn get_raw_value(&self, name: &str, operation: &'static str) -> AppResult<Option<Vec<u8>>> {
         let name_wide = to_wide(name);
         let mut value_type = REG_VALUE_TYPE(0);
         let mut size = 0u32;
@@ -156,7 +223,7 @@ impl RegistryKey {
         }
         if query_result != WIN32_ERROR(0) {
             return Err(AppError::Registry {
-                operation: "query string size",
+                operation,
                 path: format!("{}\\{}", self.path, name),
                 code: query_result.0,
             });
@@ -176,19 +243,14 @@ impl RegistryKey {
 
         if result != WIN32_ERROR(0) {
             return Err(AppError::Registry {
-                operation: "get string",
+                operation,
                 path: format!("{}\\{}", self.path, name),
                 code: result.0,
             });
         }
 
-        let wide_len = size as usize / 2;
-        let wide = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u16, wide_len) };
-        let mut text = String::from_utf16_lossy(wide);
-        while text.ends_with('\0') {
-            text.pop();
-        }
-        Ok(Some(text))
+        buffer.truncate(size as usize);
+        Ok(Some(buffer))
     }
 
     pub fn get_dword(&self, name: &str) -> AppResult<Option<u32>> {
@@ -272,4 +334,46 @@ impl Drop for RegistryKey {
 
 pub fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Encode strings as a REG_MULTI_SZ blob: each string null-terminated,
+/// with a final extra null. An empty list encodes as two nulls.
+fn encode_multi_sz(values: &[String]) -> Vec<u16> {
+    let mut wide = Vec::new();
+    for value in values {
+        wide.extend(value.encode_utf16());
+        wide.push(0);
+    }
+    wide.push(0);
+    if values.is_empty() {
+        wide.push(0);
+    }
+    wide
+}
+
+fn decode_multi_sz(wide: &[u16]) -> Vec<String> {
+    wide.split(|&ch| ch == 0)
+        .filter(|part| !part.is_empty())
+        .map(String::from_utf16_lossy)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multi_sz_round_trip() {
+        let values = vec!["KEY=value".to_string(), "PATH=C:\\a b".to_string()];
+        let encoded = encode_multi_sz(&values);
+        assert_eq!(encoded.last(), Some(&0));
+        assert_eq!(decode_multi_sz(&encoded), values);
+    }
+
+    #[test]
+    fn multi_sz_empty_list() {
+        let encoded = encode_multi_sz(&[]);
+        assert_eq!(encoded, vec![0, 0]);
+        assert!(decode_multi_sz(&encoded).is_empty());
+    }
 }

@@ -96,7 +96,10 @@ fn execute_command(service_manager: &ServiceManager, command: Commands) -> AppRe
             parameter,
             value,
         } => {
-            info!("Setting parameter '{parameter}' = '{value}' for service '{service_name}'");
+            info!(
+                "Setting parameter '{parameter}' = '{}' for service '{service_name}'",
+                value.join(" ")
+            );
             service_manager.set_service_parameter(&service_name, &parameter, &value)
         }
         Commands::Get {
@@ -126,7 +129,11 @@ fn execute_command(service_manager: &ServiceManager, command: Commands) -> AppRe
                 service_name,
                 default_value
             );
-            service_manager.set_service_parameter(&service_name, parameter.as_str(), &default_value)
+            service_manager.set_service_parameter(
+                &service_name,
+                parameter.as_str(),
+                &[default_value],
+            )
         }
         Commands::Status { service_name } => {
             info!("Querying status for service '{service_name}'");

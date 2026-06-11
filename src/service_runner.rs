@@ -238,7 +238,7 @@ fn wait_for_restart_delay(
 }
 
 fn launch_child(config: &ServiceConfig) -> AppResult<RunningChild> {
-    let mut command = build_command(config);
+    let mut command = build_command(config)?;
     let mut child = command.spawn()?;
     let child_id = child.id();
     info!("Application launched with PID: {child_id}");
@@ -305,7 +305,7 @@ fn kill_child_after_launch_failure(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn build_command(config: &ServiceConfig) -> Command {
+fn build_command(config: &ServiceConfig) -> AppResult<Command> {
     let mut command = Command::new(&config.application);
     command.current_dir(resolve_working_dir(config));
 
@@ -313,7 +313,7 @@ fn build_command(config: &ServiceConfig) -> Command {
         command.args(crate::cmdline::parse_command_line(parameters));
     }
 
-    configure_stdio(&mut command, config);
+    configure_stdio(&mut command, config)?;
 
     for env_var in &config.app_environment_extra {
         if let Some((key, value)) = env_var.split_once('=') {
@@ -321,7 +321,7 @@ fn build_command(config: &ServiceConfig) -> Command {
         }
     }
 
-    command
+    Ok(command)
 }
 
 fn resolve_working_dir(config: &ServiceConfig) -> PathBuf {
@@ -334,7 +334,17 @@ fn resolve_working_dir(config: &ServiceConfig) -> PathBuf {
     })
 }
 
-fn configure_stdio(command: &mut Command, config: &ServiceConfig) {
+fn configure_stdio(command: &mut Command, config: &ServiceConfig) -> AppResult<()> {
+    if let Some(path) = &config.app_stdin {
+        let file = std::fs::File::open(path).map_err(|error| {
+            AppError::Message(format!(
+                "Failed to open AppStdin file '{}': {error}",
+                path.display()
+            ))
+        })?;
+        command.stdin(Stdio::from(file));
+    }
+
     if config.app_stdout.is_some() || config.app_stderr.is_some() {
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -342,6 +352,8 @@ fn configure_stdio(command: &mut Command, config: &ServiceConfig) {
         command.stdout(Stdio::null());
         command.stderr(Stdio::null());
     }
+
+    Ok(())
 }
 
 fn set_child_priority(child_id: u32, config: &ServiceConfig) -> AppResult<()> {

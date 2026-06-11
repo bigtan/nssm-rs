@@ -59,8 +59,11 @@ pub enum Commands {
         service_name: String,
         /// Parameter name
         parameter: String,
-        /// Parameter value
-        value: String,
+        /// Parameter value. AppEnvironmentExtra accepts multiple KEY=VALUE
+        /// entries; AppParameters accepts multiple arguments which are
+        /// quoted and joined.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        value: Vec<String>,
     },
     /// Get service parameters
     Get {
