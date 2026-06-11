@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -394,15 +394,57 @@ fn spawn_output_thread<T>(
 where
     T: std::io::Read + Send + 'static,
 {
-    stream.map(|stream| {
-        thread::spawn(move || {
-            if is_stderr {
-                handle_output(stream, output_path, true);
-            } else {
-                handle_output(stream, output_path, false);
+    stream.map(|stream| thread::spawn(move || pump_output(stream, output_path, is_stderr)))
+}
+
+/// Drain a child output pipe for the lifetime of the process.
+///
+/// Copies raw bytes: output must not be assumed to be UTF-8, and the pipe
+/// must be drained even when the redirection file cannot be written,
+/// otherwise the pipe fills up and blocks the child.
+fn pump_output<T: std::io::Read>(mut stream: T, output_path: Option<PathBuf>, is_stderr: bool) {
+    let stream_name = if is_stderr { "stderr" } else { "stdout" };
+    let mut file = output_path.as_ref().and_then(|path| {
+        match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                error!(
+                    "Failed to open {stream_name} redirection file {path:?}: {error}; output will be discarded"
+                );
+                None
             }
-        })
-    })
+        }
+    });
+
+    let mut buffer = [0u8; 8192];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                let chunk = &buffer[..count];
+                if let Some(open_file) = file.as_mut() {
+                    if let Err(error) = open_file.write_all(chunk) {
+                        error!(
+                            "Failed to write {stream_name} redirection output: {error}; output will be discarded"
+                        );
+                        file = None;
+                    }
+                } else if output_path.is_none() {
+                    let text = String::from_utf8_lossy(chunk);
+                    let text = text.trim_end_matches(['\r', '\n']);
+                    if !text.is_empty() {
+                        if is_stderr {
+                            warn!("stderr: {text}");
+                        } else {
+                            info!("stdout: {text}");
+                        }
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
 }
 
 fn monitor_child(
@@ -626,49 +668,4 @@ fn wait_for_process_exit(child: &mut Child, timeout_ms: u32) -> bool {
         }
     }
     false
-}
-
-fn handle_output<T>(stream: T, output_path: Option<PathBuf>, is_stderr: bool)
-where
-    T: std::io::Read,
-{
-    let reader = BufReader::new(stream);
-    match output_path {
-        Some(path) => {
-            if let Err(error) = write_output_to_file(reader, &path, is_stderr) {
-                error!("Failed to write redirected output to {path:?}: {error}");
-            }
-        }
-        None => {
-            for line in reader.lines().map_while(Result::ok) {
-                log_output_line(&line, is_stderr);
-            }
-        }
-    }
-}
-
-fn write_output_to_file<T>(reader: BufReader<T>, path: &Path, is_stderr: bool) -> AppResult<()>
-where
-    T: std::io::Read,
-{
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-
-    for line in reader.lines() {
-        let line = line?;
-        log_output_line(&line, is_stderr);
-        writeln!(file, "{line}")?;
-    }
-
-    Ok(())
-}
-
-fn log_output_line(line: &str, is_stderr: bool) {
-    if is_stderr {
-        warn!("stderr: {line}");
-    } else {
-        info!("stdout: {line}");
-    }
 }
