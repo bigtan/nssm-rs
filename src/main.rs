@@ -160,24 +160,45 @@ fn init_logging(cli: &Cli) {
         log::LevelFilter::Warn
     };
 
-    env_logger::Builder::from_default_env()
-        .filter_level(log_level)
-        .target(env_logger::Target::Stdout)
-        .format(|buf, record| {
-            use std::io::Write;
+    let mut builder = env_logger::Builder::from_default_env();
+    builder.format(|buf, record| {
+        use std::io::Write;
 
-            let local_time = chrono::Local::now();
-            writeln!(
-                buf,
-                "[{} {} {}:{}] {}",
-                local_time.format("%Y-%m-%d %H:%M:%S"),
-                record.level(),
-                record.file().unwrap_or("unknown"),
-                record.line().unwrap_or(0),
-                record.args()
-            )
-        })
-        .init();
+        let local_time = chrono::Local::now();
+        writeln!(
+            buf,
+            "[{} {} {}:{}] {}",
+            local_time.format("%Y-%m-%d %H:%M:%S"),
+            record.level(),
+            record.file().unwrap_or("unknown"),
+            record.line().unwrap_or(0),
+            record.args()
+        )
+    });
+
+    if let Commands::Run { name } = &cli.command {
+        // When running as a service, stdout only reaches a hidden console;
+        // log to a per-service file so launches, exits and stop sequences
+        // can actually be diagnosed.
+        builder.filter_level(if cli.debug {
+            log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
+        });
+        match open_service_log_file(name) {
+            Some(file) => {
+                builder.target(env_logger::Target::Pipe(Box::new(file)));
+            }
+            None => {
+                builder.target(env_logger::Target::Stdout);
+            }
+        }
+    } else {
+        builder.filter_level(log_level);
+        builder.target(env_logger::Target::Stdout);
+    }
+
+    builder.init();
 
     if cli.debug {
         debug!("Debug mode enabled");
@@ -185,4 +206,33 @@ fn init_logging(cli: &Cli) {
     if cli.verbose {
         info!("Verbose mode enabled");
     }
+}
+
+/// Opens %ProgramData%\nssm-rs\logs\<service>.log for appending.
+#[cfg(windows)]
+fn open_service_log_file(service_name: &str) -> Option<std::fs::File> {
+    use std::path::PathBuf;
+
+    let base = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+    let dir = base.join("nssm-rs").join("logs");
+    std::fs::create_dir_all(&dir).ok()?;
+
+    let sanitized: String = service_name
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(format!("{sanitized}.log")))
+        .ok()
 }
