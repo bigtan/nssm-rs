@@ -1,4 +1,6 @@
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
+use windows::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, WIN32_ERROR,
+};
 use windows::Win32::System::Registry::*;
 use windows::core::{PCWSTR, PWSTR};
 
@@ -204,52 +206,60 @@ impl RegistryKey {
 
     fn get_raw_value(&self, name: &str, operation: &'static str) -> AppResult<Option<Vec<u8>>> {
         let name_wide = to_wide(name);
-        let mut value_type = REG_VALUE_TYPE(0);
         let mut size = 0u32;
-        let query_result = unsafe {
+        let probe = unsafe {
             RegQueryValueExW(
                 self.handle,
                 PCWSTR::from_raw(name_wide.as_ptr()),
                 None,
-                Some(&mut value_type),
+                None,
                 None,
                 Some(&mut size),
             )
         };
 
-        if query_result == ERROR_FILE_NOT_FOUND {
+        if probe == ERROR_FILE_NOT_FOUND {
             return Ok(None);
         }
-        if query_result != WIN32_ERROR(0) {
+        if probe != WIN32_ERROR(0) {
             return Err(AppError::Registry {
                 operation,
                 path: format!("{}\\{}", self.path, name),
-                code: query_result.0,
+                code: probe.0,
             });
         }
 
-        let mut buffer = vec![0u8; size as usize];
-        let result = unsafe {
-            RegQueryValueExW(
-                self.handle,
-                PCWSTR::from_raw(name_wide.as_ptr()),
-                None,
-                Some(&mut value_type),
-                Some(buffer.as_mut_ptr()),
-                Some(&mut size),
-            )
-        };
+        // The value can grow between the size probe and the read; on
+        // ERROR_MORE_DATA `size` holds the new requirement, so retry.
+        loop {
+            let mut buffer = vec![0u8; size as usize];
+            let result = unsafe {
+                RegQueryValueExW(
+                    self.handle,
+                    PCWSTR::from_raw(name_wide.as_ptr()),
+                    None,
+                    None,
+                    Some(buffer.as_mut_ptr()),
+                    Some(&mut size),
+                )
+            };
 
-        if result != WIN32_ERROR(0) {
+            if result == WIN32_ERROR(0) {
+                buffer.truncate(size as usize);
+                return Ok(Some(buffer));
+            }
+            if result == ERROR_FILE_NOT_FOUND {
+                return Ok(None);
+            }
+            if result == ERROR_MORE_DATA {
+                continue;
+            }
             return Err(AppError::Registry {
                 operation,
                 path: format!("{}\\{}", self.path, name),
                 code: result.0,
             });
         }
-
-        buffer.truncate(size as usize);
-        Ok(Some(buffer))
     }
 
     pub fn get_dword(&self, name: &str) -> AppResult<Option<u32>> {
@@ -301,10 +311,7 @@ impl RegistryKey {
                 )
             };
 
-            if result == ERROR_FILE_NOT_FOUND {
-                break;
-            }
-            if result.0 == 259 {
+            if result == ERROR_FILE_NOT_FOUND || result == ERROR_NO_MORE_ITEMS {
                 break;
             }
             if result != WIN32_ERROR(0) {
