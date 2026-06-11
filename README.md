@@ -45,6 +45,10 @@ nssm-rs list
 
 For detailed logging documentation, see [LOGGING.md](LOGGING.md).
 
+When running as a service, runtime logs (application launches, exits,
+restarts and the stop sequence) are written to
+`%ProgramData%\nssm-rs\logs\<service>.log`.
+
 ## Quick Start
 
 1. **Build the project**:
@@ -101,6 +105,13 @@ For detailed logging documentation, see [LOGGING.md](LOGGING.md).
 - `AppStdout` - Redirect stdout to file
 - `AppStderr` - Redirect stderr to file
 - `AppStdin` - Redirect stdin from file
+
+### Environment
+- `AppEnvironmentExtra` - Extra environment variables for the application.
+  Accepts multiple `KEY=VALUE` entries; set a single empty value (`""`) to clear:
+  ```powershell
+  nssm-rs set MyService AppEnvironmentExtra PORT=8080 "DATA_DIR=C:\My Data"
+  ```
 
 ### Restart Behavior
 - `AppExitAction` - Action on exit (Restart, Ignore, Exit)
